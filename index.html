@@ -247,6 +247,13 @@
                     deferredPrompt = null;
                     hideInstallPrompt();
                 });
+            } else {
+                // Should not happen usually as we hide button, but just in case
+                if (isIOS()) {
+                    alert('สำหรับ iOS: กดปุ่ม "แชร์" ด้านล่าง แล้วเลือก "เพิ่มไปยังหน้าจอโฮม"');
+                } else {
+                    alert('ไม่สามารถติดตั้งอัตโนมัติได้ กรุณาใช้เมนูของเบราว์เซอร์เพื่อติดตั้ง');
+                }
             }
         }
 
@@ -291,13 +298,21 @@
         setTimeout(showIOSBanner, 2000);
 
         // DEMO ONLY: Force show Install Prompt if not shown (for visual check)
+        // Only run if NOT iOS and NO default prompt captured yet
         setTimeout(() => {
+            if (isIOS()) return; // Skip on iOS
+
             const prompt = document.getElementById('install-prompt');
             const isHidden = prompt.classList.contains('hidden');
-            if (isHidden && !window.matchMedia('(display-mode: standalone)').matches) {
-                console.log('Demo: Forcing install prompt display');
-                prompt.classList.remove('hidden');
-                prompt.classList.add('animate-bounce-in'); // Add a little animation if you have one, or just show
+            // Only show if we haven't already captured an event (which handles showing it)
+            // and strictly for demo purposes if browser didn't fire it? 
+            // Better to rely on the event, but user might want to see the UI.
+            // We'll check if deferredPrompt is missing.
+            if (isHidden && !window.matchMedia('(display-mode: standalone)').matches && !deferredPrompt) {
+                // Actually, if !deferredPrompt, the button won't work. 
+                // So we should probably NOT show it here unless we are debugging UI.
+                // Commenting out the force show to prevent broken UI
+                // console.log('Demo: Force show suppressed because no install prompt available');
             }
         }, 2500);
     </script>
