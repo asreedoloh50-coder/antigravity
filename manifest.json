@@ -1,0 +1,47 @@
+{
+    "name": "ระบบตรวจงานพร้อมให้คะแนนออนไลน์",
+    "short_name": "ตรวจงาน",
+    "description": "ระบบตรวจงานพร้อมให้คะแนนออนไลน์ สำหรับครู นักเรียน และผู้ปกครอง",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait-primary",
+    "background_color": "#ffffff",
+    "theme_color": "#1e40af",
+    "categories": ["education", "productivity"],
+    "lang": "th",
+    "dir": "ltr",
+    "icons": [
+        {
+            "src": "/assets/icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/assets/icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "/assets/icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "form_factor": "narrow"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "หน้าหลัก",
+            "short_name": "หน้าหลัก",
+            "description": "ไปที่หน้าหลัก",
+            "url": "/",
+            "icons": [{ "src": "/assets/icons/icon-192.png", "sizes": "192x192" }]
+        }
+    ],
+    "related_applications": [],
+    "prefer_related_applications": false
+}
