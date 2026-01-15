@@ -16,21 +16,42 @@
  */
 
 // ===== CONFIG =====
-const SPREADSHEET_ID = '1M4Q4GqjtWpCFfI0mJJ0LeWHqmjiVS0jlpo7XObTHptM'; // User provided Sheet ID
+// ===== CONFIG =====
+const SPREADSHEET_ID = ''; // Leave empty to AUTO-CREATE a new Sheet for this project
 
 /**
  * Return the Spreadsheet object.
  */
 function getDB() {
   if (SPREADSHEET_ID) {
-    return SpreadsheetApp.openById(SPREADSHEET_ID);
+    try {
+      return SpreadsheetApp.openById(SPREADSHEET_ID);
+    } catch (e) {
+      console.warn('Cannot open hardcoded ID, falling back to auto-create:', e);
+    }
   }
   const props = PropertiesService.getScriptProperties();
   let id = props.getProperty('DB_SPREADSHEET_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (id) {
+    try {
+      return SpreadsheetApp.openById(id);
+    } catch(e) {
+      // ID invalid or deleted, create new
+    }
+  }
   const ss = SpreadsheetApp.create('SmartSchoolDB');
   props.setProperty('DB_SPREADSHEET_ID', ss.getId());
+  // Setup default sheets immediately
+  setupSheets(ss);
   return ss;
+}
+
+function setupSheets(ss) {
+    const sheets = ['Users', 'Sessions', 'Classes', 'SubjectCatalog', 'ClassSubjects', 'Enrollments', 'Assignments', 'Submissions', 'Grades', 'Parents', 'Notifications', 'Terms', 'AuditLogs'];
+    sheets.forEach(s => {
+        let sheet = ss.getSheetByName(s);
+        if(!sheet) ss.insertSheet(s);
+    });
 }
 
 // ===== MAIN HANDLERS =====
@@ -43,6 +64,7 @@ function doGet(e) {
   }
   if (e && e.parameter && e.parameter.action === 'testPopulate') {
     const result = testPopulateData();
+    // Redirect to the sheet for convenience
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
 }
@@ -289,7 +311,7 @@ function testPopulateData() {
   if(!findRow(db,'Assignments','id','a1'))
      createRow(db, 'Assignments', { id:'a1', classSubjectId:'cs1', title:'การบ้าน 1', dueDate:now, maxScore:10, createdAt:now, isActive:true });
 
-  return { success:true, message:'Database populated with full structure.' };
+  return { success:true, message:'Database populated with full structure.', databaseUrl: db.getUrl() };
 }
 
 // ===== API HANDLERS =====
