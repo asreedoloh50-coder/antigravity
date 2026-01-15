@@ -159,6 +159,7 @@ function handleRequestCore(action, params) {
     case 'updateSubjectCatalog': result = handleUpdate('SubjectCatalog', { ...params, id: params.catalogId }); break;
     case 'deleteSubjectCatalog': result = handleDelete('SubjectCatalog', { id: params.catalogId }); break;
     case 'listSubjectTemplates': result = handleListSubjectTemplates(); break;
+    case 'adminGetDashboardStats': result = handleAdminGetDashboardStats(); break;
 
     // --- Admin: Teachers & Terms ---
     case 'listTeachers': result = handleListTeachers(); break;
@@ -707,7 +708,52 @@ function handleListUsers(p) { return handleListPaginated('Users', p); }
 function handleUpdateUser(p, u) { return handleUpdate('Users', p); }
 function handleRestoreData() { return { success: false, error: 'Not implemented' }; }
 function handleBackupData() { return { success: false, error: 'Not implemented' }; }
-function handleListSubjectTemplates() { return { success: true, data: [] }; }
+function handleListSubjectTemplates() {
+  const db = getDB();
+  const catalog = readSheet(db, 'SubjectCatalog').filter(c => c.isActive);
+  
+  // Group by Category
+  const grouped = {};
+  catalog.forEach(item => {
+    const cat = item.category || 'อื่นๆ';
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push({
+       id: item.id,
+       name: item.subjectName,
+       code: item.subjectCode
+    });
+  });
+
+  return { 
+    success: true, 
+    data: {
+      templates: catalog.map(c => ({ id: c.id, name: c.subjectName, code: c.subjectCode })),
+      grouped: grouped
+    } 
+  };
+}
+
+function handleAdminGetDashboardStats() {
+    const db = getDB();
+    const users = readSheet(db, 'Users').filter(u => u.isActive);
+    const logs = readSheet(db, 'AuditLogs'); // We might want to limit this read if logs are huge
+    
+    // Simple Counts
+    const stats = {
+        totalUsers: users.length,
+        teachers: users.filter(u => u.role === 'teacher').length,
+        students: users.filter(u => u.role === 'student').length,
+        parents: users.filter(u => u.role === 'parent').length
+    };
+    
+    // Recent logs (Last 5)
+    // Assuming logs are appended, so last rows are newest. 
+    // If we want accurate sort by timestamp, we should sort.
+    const recentLogs = logs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5);
+
+    return { success: true, data: { stats, recentLogs } };
+}
+
 function handleListTeachers() { return handleList('Users', { role: 'teacher' }); }
 function handleListMyClassSubjects() { return { success: true, data: [] }; }
 

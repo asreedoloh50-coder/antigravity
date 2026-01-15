@@ -58,36 +58,38 @@ const Admin = {
     },
 
     async loadDashboardData() {
-        const usersRes = await API.request('listUsers', { pageSize: 1000 });
-        const users = usersRes.data?.data || [];
+        // Fetch stats from backend (optimized)
+        const statsRes = await API.request('adminGetDashboardStats', {});
 
-        document.getElementById('users-count').textContent = users.length;
-        document.getElementById('teachers-count').textContent = users.filter(u => u.role === 'teacher').length;
-        document.getElementById('students-count').textContent = users.filter(u => u.role === 'student').length;
-        document.getElementById('parents-count').textContent = users.filter(u => u.role === 'parent').length;
+        if (statsRes.success && statsRes.data) {
+            const { stats, recentLogs } = statsRes.data;
+
+            // Update Counts
+            document.getElementById('users-count').textContent = stats.totalUsers || 0;
+            document.getElementById('teachers-count').textContent = stats.teachers || 0;
+            document.getElementById('students-count').textContent = stats.students || 0;
+            document.getElementById('parents-count').textContent = stats.parents || 0;
+
+            // Updated Logs
+            const logsContainer = document.getElementById('recent-logs');
+            if (!recentLogs || recentLogs.length === 0) {
+                logsContainer.innerHTML = UI.emptyState('ยังไม่มีบันทึก', '');
+            } else {
+                logsContainer.innerHTML = recentLogs.map(log => `
+                    <div class="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
+                        <div>
+                            <p class="font-medium">${Utils.escapeHtml(log.action)}</p>
+                            <p class="text-sm text-gray-500">${log.targetType}: ${log.targetId}</p>
+                        </div>
+                        <span class="text-sm text-gray-400">${Utils.formatRelativeTime(log.createdAt)}</span>
+                    </div>
+                `).join('');
+            }
+        }
 
         // Academic year from config
         const data = Store.getDemoData();
         document.getElementById('academic-year').textContent = data.config?.academicYear || '-';
-
-        // Recent logs
-        const logsRes = await API.request('getAuditLogs', { pageSize: 10 });
-        const logsContainer = document.getElementById('recent-logs');
-
-        if (!logsRes.success || !logsRes.data?.data?.length) {
-            logsContainer.innerHTML = UI.emptyState('ยังไม่มีบันทึก', '');
-            return;
-        }
-
-        logsContainer.innerHTML = logsRes.data.data.map(log => `
-            <div class="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
-                <div>
-                    <p class="font-medium">${Utils.escapeHtml(log.action)}</p>
-                    <p class="text-sm text-gray-500">${log.targetType}: ${log.targetId}</p>
-                </div>
-                <span class="text-sm text-gray-400">${Utils.formatRelativeTime(log.createdAt)}</span>
-            </div>
-        `).join('');
     },
 
     // Users management
