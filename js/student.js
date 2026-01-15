@@ -2,6 +2,31 @@
  * Student Module - Student functionality
  */
 const Student = {
+    // Cache for frequently used data
+    _cache: {
+        classes: null,
+        subjects: null,
+        lastFetch: 0
+    },
+
+    // Prefetch data in background
+    async prefetchData() {
+        const TWO_MINUTES = 2 * 60 * 1000;
+        if (Date.now() - this._cache.lastFetch < TWO_MINUTES) return;
+
+        try {
+            const [classesRes, subjectsRes] = await Promise.all([
+                API.request('listClasses'),
+                API.request('listSubjects', {})
+            ]);
+            this._cache.classes = classesRes.data || [];
+            this._cache.subjects = subjectsRes.data || [];
+            this._cache.lastFetch = Date.now();
+        } catch (e) {
+            console.warn('Student prefetch failed', e);
+        }
+    },
+
     // Dashboard
     async renderDashboard() {
         const app = document.getElementById('app');
@@ -35,6 +60,9 @@ const Student = {
         `);
 
         this.loadDashboardData();
+
+        // Pre-fetch data for other pages in background
+        this.prefetchData();
     },
 
     async loadDashboardData() {
@@ -119,18 +147,22 @@ const Student = {
             return;
         }
 
-        // 2. Fetch Subjects for each class and Render
+        // 2. Fetch Subjects for ALL classes in PARALLEL (much faster!)
+        const subjectPromises = classesRes.data.map(classInfo =>
+            API.request('listSubjects', { classId: classInfo.id })
+                .then(res => ({ classInfo, subjects: res.data || [] }))
+        );
+
+        const results = await Promise.all(subjectPromises);
+
+        // 3. Render all classes
         let contentHtml = '';
-
-        for (const classInfo of classesRes.data) {
-            const subjectsRes = await API.request('listSubjects', { classId: classInfo.id });
-            const subjects = subjectsRes.data || [];
-
+        for (const { classInfo, subjects } of results) {
             contentHtml += `
                 <div class="mb-8 last:mb-0">
                     <div class="flex items-center mb-4">
                         <div class="w-1.5 h-8 bg-primary-600 rounded-full mr-3"></div>
-                        <h2 class="text-xl font-bold text-gray-800">${Utils.escapeHtml(classInfo.name)}</h2>
+                        <h2 class="text-xl font-bold text-gray-800">${Utils.escapeHtml(classInfo.name || classInfo.level + '/' + classInfo.room)}</h2>
                     </div>
 
                     ${subjects.length === 0 ?
@@ -172,6 +204,7 @@ const Student = {
 
         container.innerHTML = contentHtml;
     },
+
 
     showJoinClassModal() {
         UI.showModal('เข้าร่วมห้องเรียน', `
@@ -349,18 +382,20 @@ const Student = {
     },
 
     async loadStudentAssignments(query = '', filter = 'ทั้งหมด') {
-        // 1. Fetch Submissions
-        const subsRes = await API.request('listSubmissionsByStudent', { pageSize: 100 });
+        // 1. Fetch Submissions, Subjects, and Classes in PARALLEL
+        const [subsRes, subjectsRes, classesRes] = await Promise.all([
+            API.request('listSubmissionsByStudent', { pageSize: 100 }),
+            API.request('listSubjects', {}),
+            API.request('listClasses')
+        ]);
+
         const mySubmissions = subsRes.data?.data || [];
-
-        // 2. Fetch All Subjects (Legacy + Class Subjects)
-        const subjectsRes = await API.request('listSubjects', {});
         const subjects = subjectsRes.data || [];
+        const classes = classesRes.data || [];
 
-        // 3. Fetch Assignments for all subjects
+        // 2. Fetch Assignments for all subjects in PARALLEL
         let allAssignments = [];
 
-        // Fetch in parallel for better performance
         const assignmentPromises = subjects.map(s =>
             API.request('listAssignments', { subjectId: s.id, query, pageSize: 100 })
                 .then(res => ({ subject: s, assignments: res.data?.data || [] }))
@@ -369,34 +404,21 @@ const Student = {
         const results = await Promise.all(assignmentPromises);
 
         for (const res of results) {
-            // Find class name if possible (optional, maybe from cache or subject structure if we enriched it)
-            // The enriched subject from listSubjects has classId. We could fetch classes to map name.
-            // But simple subject name is enough for now or we fetch classes once.
+            // Find class name directly (we already have classes data)
+            const classObj = classes.find(c => c.id === res.subject.classId);
+            const className = classObj ? (classObj.name || classObj.level + '/' + classObj.room) : '';
 
             allAssignments = allAssignments.concat(res.assignments.map(a => {
                 const submission = mySubmissions.find(sub => sub.assignmentId === a.id);
                 return {
                     ...a,
-                    className: '', // We could map this if we fetched classes, but for now empty or todo
+                    className: className,
                     subjectName: res.subject.name,
                     submission,
                     myStatus: submission?.status || 'NOT_SUBMITTED'
                 };
             }));
         }
-
-        // Fetch classes just to map names (optional but nice)
-        const classesRes = await API.request('listClasses');
-        const classes = classesRes.data || [];
-        allAssignments.forEach(a => {
-            // Try to find class name from subject's classId if we can link it back
-            // In listAssignments, we might not have classId explicitly on assignment, but we can look up subject
-            const subject = subjects.find(s => s.id === a.subjectId || s.id === a.classSubjectId);
-            if (subject && subject.classId) {
-                const cls = classes.find(c => c.id === subject.classId);
-                if (cls) a.className = cls.name;
-            }
-        });
 
         // Filter
         if (filter !== 'ทั้งหมด') {

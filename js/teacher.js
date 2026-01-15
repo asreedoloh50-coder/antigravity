@@ -2,6 +2,28 @@
  * Teacher Module - Teacher functionality
  */
 const Teacher = {
+    // Cache
+    _cache: {
+        lastFetch: 0,
+        myClassSubjects: null
+    },
+
+    // Prefetch
+    async prefetchData() {
+        const TWO_MINUTES = 2 * 60 * 1000;
+        if (Date.now() - this._cache.lastFetch < TWO_MINUTES && this._cache.myClassSubjects) return;
+
+        try {
+            const res = await API.request('listMyClassSubjects', {});
+            if (res.success) {
+                this._cache.myClassSubjects = res.data;
+                this._cache.lastFetch = Date.now();
+            }
+        } catch (e) {
+            console.warn('Teacher prefetch failed', e);
+        }
+    },
+
     // Dashboard
     async renderDashboard() {
         const app = document.getElementById('app');
@@ -38,6 +60,7 @@ const Teacher = {
         `);
 
         this.loadDashboardData();
+        this.prefetchData();
     },
 
     async loadDashboardData() {
@@ -530,49 +553,56 @@ const Teacher = {
     },
 
     async showCreateAssignmentFlow() {
-        // First select class and subject
-        const classesRes = await API.request('listClasses');
-        if (!classesRes.success || !classesRes.data?.length) {
-            UI.showToast('กรุณาสร้างห้องเรียนก่อน', 'warning');
-            return;
-        }
-
-        let subjectsHtml = '';
-        for (const c of classesRes.data) {
-            const subRes = await API.request('listSubjects', { classId: c.id });
-            if (subRes.data?.length) {
-                subjectsHtml += subRes.data.map(s =>
-                    `<option value="${s.id}">${c.name} - ${s.name}</option>`
-                ).join('');
+        // Use cached data if available, otherwise fetch
+        let myClassSubjects = this._cache.myClassSubjects;
+        if (!myClassSubjects) {
+            const res = await API.request('listMyClassSubjects', {});
+            if (res.success) {
+                myClassSubjects = res.data;
+                this._cache.myClassSubjects = res.data;
             }
         }
 
-        if (!subjectsHtml) {
-            UI.showToast('กรุณาสร้างรายวิชาก่อน', 'warning');
+        // If data is in new format (array of objects), map it. 
+        // Note: listMyClassSubjects returns { data: [...] } or just array depending on implementation.
+        // My recent backend change returns { success: true, data: [...] } which is an array of enriched class subjects.
+
+        const subjects = Array.isArray(myClassSubjects) ? myClassSubjects : (myClassSubjects?.data || []);
+
+        if (!subjects.length) {
+            UI.showToast('กรุณารอการมอบหมายวิชาจากผู้ดูแลระบบ', 'warning');
             return;
         }
+
+        const subjectsHtml = subjects.map(s =>
+            `<option value="${s.id}">${Utils.escapeHtml(s.className)} - ${Utils.escapeHtml(s.subjectName)} (${s.id.substring(0, 4)})</option>`
+        ).join('');
 
         UI.showModal('สร้างงานใหม่', `
             <form id="create-assignment-form" class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">วิชา</label>
-                    <select name="subjectId" class="input-field" required>${subjectsHtml}</select>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">เลือกวิชาที่จะสั่งงาน</label>
+                    <select name="classSubjectId" class="input-field" required>
+                        ${subjectsHtml}
+                    </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">ชื่องาน</label>
-                    <input type="text" name="title" class="input-field" required>
+                    <input type="text" name="title" class="input-field" required placeholder="เช่น แบบฝึกหัดที่ 1">
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">รายละเอียด</label>
-                    <textarea name="detail" class="input-field" rows="3"></textarea>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">รายละเอียด/คำสั่ง</label>
+                    <textarea name="detail" class="input-field" rows="3" placeholder="อธิบายรายละเอียดงาน..."></textarea>
                 </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">กำหนดส่ง</label>
-                    <input type="datetime-local" name="dueDate" class="input-field" required>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">คะแนนเต็ม</label>
-                    <input type="number" name="maxScore" class="input-field" value="10" min="1" required>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">กำหนดส่ง</label>
+                        <input type="datetime-local" name="dueDate" class="input-field" required>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">คะแนนเต็ม</label>
+                        <input type="number" name="maxScore" class="input-field" value="10" min="1" required>
+                    </div>
                 </div>
                 <button type="submit" class="btn btn-primary w-full">สร้างงาน</button>
             </form>
@@ -580,21 +610,33 @@ const Teacher = {
 
         document.getElementById('create-assignment-form').onsubmit = async (e) => {
             e.preventDefault();
-            const fd = new FormData(e.target);
-            const res = await API.request('createAssignment', {
-                subjectId: fd.get('subjectId'),
-                title: fd.get('title'),
-                detail: fd.get('detail'),
-                dueDate: new Date(fd.get('dueDate')).toISOString(),
-                maxScore: parseInt(fd.get('maxScore'))
-            });
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.textContent = 'กำลังสร้าง...';
 
-            if (res.success) {
-                UI.hideModal();
-                UI.showToast('สร้างงานสำเร็จ', 'success');
-                this.renderAssignments();
-            } else {
-                UI.showToast(res.error, 'error');
+            try {
+                const fd = new FormData(e.target);
+                // Note: backend expects 'classSubjectId' now for v2/assigned subjects
+                const res = await API.request('createAssignmentV2', {
+                    classSubjectId: fd.get('classSubjectId'),
+                    title: fd.get('title'),
+                    detail: fd.get('detail'),
+                    dueDate: new Date(fd.get('dueDate')).toISOString(),
+                    maxScore: parseInt(fd.get('maxScore'))
+                });
+
+                if (res.success) {
+                    UI.hideModal();
+                    UI.showToast('สร้างงานสำเร็จ', 'success');
+                    this.renderAssignments();
+                } else {
+                    UI.showToast(res.error, 'error');
+                }
+            } catch (err) {
+                UI.showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'สร้างงาน';
             }
         };
     },

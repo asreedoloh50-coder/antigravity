@@ -2,6 +2,38 @@
  * Parent Module - Parent functionality
  */
 const Parent = {
+    // Cache
+    _cache: {
+        children: null,
+        grades: {}, // studentId -> grades
+        lastFetch: 0
+    },
+
+    // Prefetch
+    async prefetchData() {
+        const TWO_MINUTES = 2 * 60 * 1000;
+        if (Date.now() - this._cache.lastFetch < TWO_MINUTES && this._cache.children) return;
+
+        try {
+            const childrenRes = await API.request('getLinkedStudents');
+            if (childrenRes.success) {
+                this._cache.children = childrenRes.data;
+                this._cache.lastFetch = Date.now();
+
+                // Prefetch grades for all children in parallel
+                if (this._cache.children.length > 0) {
+                    this._cache.children.forEach(child => {
+                        API.request('parentGetGrades', { studentId: child.id }).then(res => {
+                            if (res.success) this._cache.grades[child.id] = res.data;
+                        });
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn('Parent prefetch failed', e);
+        }
+    },
+
     // Dashboard
     async renderDashboard() {
         const app = document.getElementById('app');
@@ -30,6 +62,7 @@ const Parent = {
         `);
 
         this.loadDashboardData();
+        this.prefetchData();
     },
 
     async loadDashboardData() {
@@ -307,11 +340,16 @@ const Parent = {
             return;
         }
 
-        let html = '';
-        for (const child of childrenRes.data) {
-            const gradesRes = await API.request('parentGetGrades', { studentId: child.id });
-            const grades = gradesRes.data || [];
+        // Parallel Fetching
+        const gradePromises = childrenRes.data.map(child =>
+            API.request('parentGetGrades', { studentId: child.id })
+                .then(res => ({ child, grades: res.data || [] }))
+        );
 
+        const results = await Promise.all(gradePromises);
+
+        let html = '';
+        for (const { child, grades } of results) {
             const graded = grades.filter(g => g.grade);
             const totalScore = graded.reduce((sum, g) => sum + (g.grade?.score || 0), 0);
             const totalMax = graded.reduce((sum, g) => sum + (g.assignment?.maxScore || 0), 0);

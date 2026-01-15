@@ -1359,12 +1359,19 @@ const API = {
             const catalog = Store.demoFind('subject_catalog', c => c.id === cs.catalogId);
             const classData = Store.demoFind('classes', c => c.id === cs.classId);
             const teacher = Store.demoFind('users', u => u.id === cs.teacherId);
+
+            // Generate className from level/room if name is empty
+            let className = classData?.name;
+            if (!className && classData?.level && classData?.room) {
+                className = classData.level + '/' + classData.room;
+            }
+
             return {
                 ...cs,
                 subjectCode: catalog?.subjectCode || '',
                 subjectName: catalog?.subjectName || '',
                 category: catalog?.category || '',
-                className: classData?.name || '',
+                className: className || '-',
                 classLevel: classData?.level || '',
                 teacherName: teacher?.name || ''
             };

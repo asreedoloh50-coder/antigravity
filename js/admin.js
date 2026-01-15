@@ -2,6 +2,13 @@
  * Admin Module - Admin functionality
  */
 const Admin = {
+    // Pre-loaded data cache for instant modal display
+    _prefetchedData: {
+        terms: null,
+        teachers: null,
+        lastFetch: 0
+    },
+
     // Dashboard
     async renderDashboard() {
         const app = document.getElementById('app');
@@ -54,7 +61,34 @@ const Admin = {
             </div>
         `);
 
+        // Load dashboard data
         this.loadDashboardData();
+
+        // Pre-fetch data for modals in background (for faster modal display)
+        this.prefetchModalData();
+    },
+
+    // Pre-fetch Terms and Teachers for instant modal display
+    async prefetchModalData() {
+        // Only refetch if cache is older than 2 minutes
+        const TWO_MINUTES = 2 * 60 * 1000;
+        if (Date.now() - this._prefetchedData.lastFetch < TWO_MINUTES) {
+            return; // Use cached data
+        }
+
+        // Fetch in background without blocking UI
+        try {
+            const [termsRes, teachersRes] = await Promise.all([
+                API.request('listTerms'),
+                API.request('listTeachers')
+            ]);
+
+            this._prefetchedData.terms = termsRes.data || [];
+            this._prefetchedData.teachers = teachersRes.data || [];
+            this._prefetchedData.lastFetch = Date.now();
+        } catch (e) {
+            console.warn('Prefetch failed, will fetch on demand', e);
+        }
     },
 
     async loadDashboardData() {
@@ -597,19 +631,47 @@ const Admin = {
     },
 
     async showCreateClassModal() {
-        const termsRes = await API.request('listTerms');
-        const teachersRes = await API.request('listTeachers');
-        const terms = termsRes.data || [];
-        const teachers = teachersRes.data || [];
+        let terms, teachers;
+
+        // Check if we have prefetched data (instant display)
+        const hasPrefetchedData = this._prefetchedData.terms && this._prefetchedData.teachers;
+
+        if (hasPrefetchedData) {
+            // Use prefetched data - INSTANT!
+            terms = this._prefetchedData.terms;
+            teachers = this._prefetchedData.teachers;
+        } else {
+            // Show loading modal while fetching
+            UI.showModal('เพิ่มห้องเรียนใหม่', `
+                <div class="flex items-center justify-center py-8">
+                    <div class="animate-spin w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full"></div>
+                    <span class="ml-3 text-gray-500">กำลังโหลดข้อมูล...</span>
+                </div>
+            `);
+
+            // Load Terms and Teachers in PARALLEL (faster)
+            const [termsRes, teachersRes] = await Promise.all([
+                API.request('listTerms'),
+                API.request('listTeachers')
+            ]);
+
+            terms = termsRes.data || [];
+            teachers = teachersRes.data || [];
+
+            // Cache for next time
+            this._prefetchedData.terms = terms;
+            this._prefetchedData.teachers = teachers;
+            this._prefetchedData.lastFetch = Date.now();
+        }
 
         const levels = [
             'ป.1', 'ป.2', 'ป.3', 'ป.4', 'ป.5', 'ป.6',
             'ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'
         ];
-        // ห้องทับ 1-4
         const rooms = ['1', '2', '3', '4'];
 
-        UI.showModal('เพิ่มห้องเรียนใหม่', `
+        // Build form HTML
+        const formHTML = `
             <form id="create-class-form" class="space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
@@ -653,8 +715,23 @@ const Admin = {
 
                 <button type="submit" class="btn btn-primary w-full">สร้างห้องเรียน</button>
             </form>
-        `);
+        `;
 
+        // Show modal with form (or update existing modal)
+        if (hasPrefetchedData) {
+            // Show modal directly with content
+            UI.showModal('เพิ่มห้องเรียนใหม่', formHTML);
+        } else {
+            // Update existing loading modal
+            const modalBody = document.querySelector('.modal-content .modal-body, .modal-content > div:last-child');
+            if (modalBody) {
+                modalBody.innerHTML = formHTML;
+            } else {
+                UI.showModal('เพิ่มห้องเรียนใหม่', formHTML);
+            }
+        }
+
+        // Setup form submit handler
         document.getElementById('create-class-form').onsubmit = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
@@ -668,6 +745,8 @@ const Admin = {
             if (res.success) {
                 UI.hideModal();
                 UI.showToast('สร้างห้องเรียนสำเร็จ', 'success');
+                // Clear prefetch cache so next modal shows fresh data
+                this._prefetchedData.lastFetch = 0;
                 this.loadClasses();
             } else {
                 UI.showToast(res.error, 'error');
@@ -1041,10 +1120,12 @@ const Admin = {
 
         // Load classes for filter
         const classesRes = await API.request('adminListClasses', {});
-        if (classesRes.success) {
+        if (classesRes.success && classesRes.data) {
             const select = document.getElementById('class-filter');
-            classesRes.data.data.forEach(c => {
-                select.innerHTML += `<option value="${c.id}">${Utils.escapeHtml(c.name)}</option>`;
+            // Handle both array and paginated format
+            const classes = Array.isArray(classesRes.data) ? classesRes.data : (classesRes.data.data || []);
+            classes.forEach(c => {
+                select.innerHTML += `<option value="${c.id}">${Utils.escapeHtml(c.name || c.level + '/' + c.room)}</option>`;
             });
         }
 
@@ -1090,43 +1171,56 @@ const Admin = {
     },
 
     async showAssignSubjectModal() {
-        // Load classes and catalog
+        // Show loading immediately for perceived speed
+        UI.showModal('มอบหมายวิชาให้ห้องเรียน', `
+            <div class="flex items-center justify-center py-8">
+                <div class="animate-spin w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full"></div>
+                <span class="ml-3 text-gray-500">กำลังโหลดข้อมูล...</span>
+            </div>
+        `);
+
+        // Load classes and catalog in PARALLEL
         const [classesRes, catalogRes, teachersRes] = await Promise.all([
-            API.request('adminListClasses', { pageSize: 100, sort: 'name' }), // Sort by name for dropdown
-            API.request('listSubjectCatalog', { pageSize: 100, sort: 'code' }), // Sort by code for dropdown
+            API.request('adminListClasses', { pageSize: 100, sort: 'name' }),
+            API.request('listSubjectCatalog', { pageSize: 100, sort: 'code' }),
             API.request('listTeachers', {})
         ]);
 
-        const classes = classesRes.data?.data || classesRes.data || []; // Handle both array and paginated
-        const catalogs = catalogRes.data?.data || catalogRes.data || [];
-        const teachers = teachersRes.data?.data || teachersRes.data || [];
+        // Handle both array and paginated format
+        const classes = Array.isArray(classesRes.data) ? classesRes.data : (classesRes.data?.data || []);
+        const catalogs = Array.isArray(catalogRes.data) ? catalogRes.data : (catalogRes.data?.data || []);
+        const teachers = Array.isArray(teachersRes.data) ? teachersRes.data : (teachersRes.data?.data || []);
 
-        UI.showModal('มอบหมายวิชาให้ห้องเรียน', `
+        // Build form HTML
+        const formHTML = `
             <form id="assign-subject-form" class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">ห้องเรียน <span class="text-red-500">*</span></label>
                     <select name="classId" class="input-field" required>
                         <option value="">เลือกห้องเรียน</option>
-                        ${classes.map(c => `<option value="${c.id}">${Utils.escapeHtml(c.name)}</option>`).join('')}
+                        ${classes.map(c => `<option value="${c.id}">${Utils.escapeHtml(c.name || (c.level + '/' + c.room) || '-')}</option>`).join('')}
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">วิชา <span class="text-red-500">*</span></label>
                     <select name="catalogId" class="input-field" required>
                         <option value="">เลือกวิชา</option>
-                        ${catalogs.map(c => `<option value="${c.id}">[${Utils.escapeHtml(c.subjectCode)}] ${Utils.escapeHtml(c.subjectName)}</option>`).join('')}
+                        ${catalogs.map(c => `<option value="${c.id}">[${Utils.escapeHtml(c.subjectCode || '')}] ${Utils.escapeHtml(c.subjectName || '')}</option>`).join('')}
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">ครูผู้สอน (Optional)</label>
                     <select name="teacherId" class="input-field">
                         <option value="">- เลือกครูผู้สอนภายหลัง -</option>
-                        ${teachers.map(t => `<option value="${t.id}">${Utils.escapeHtml(t.name)}</option>`).join('')}
+                        ${teachers.map(t => `<option value="${t.id}">${Utils.escapeHtml(t.name || '')}</option>`).join('')}
                     </select>
                 </div>
                 <button type="submit" class="btn btn-primary w-full">มอบหมาย</button>
             </form>
-        `);
+        `;
+
+        // Update modal content
+        UI.showModal('มอบหมายวิชาให้ห้องเรียน', formHTML);
 
         document.getElementById('assign-subject-form').onsubmit = async (e) => {
             e.preventDefault();
@@ -1189,6 +1283,216 @@ const Admin = {
         if (res.success) {
             UI.showToast('ลบสำเร็จ', 'success');
             this.loadClassSubjects();
+        } else {
+            UI.showToast(res.error, 'error');
+        }
+    },
+
+    // ===== Subject Catalog (รายวิชา) =====
+    async renderSubjectCatalog() {
+        const app = document.getElementById('app');
+        app.innerHTML = UI.pageWrapper(`
+            <div class="page-enter">
+                ${UI.header('จัดการรายวิชา', `
+                    <button onclick="Admin.showCreateSubjectModal()" class="btn btn-primary">+ เพิ่มรายวิชา</button>
+                `)}
+
+                <div class="mb-4 flex flex-col sm:flex-row gap-2">
+                    ${UI.searchBox('search-subjects', 'ค้นหารายวิชา...')}
+                    <select id="category-filter" class="input-field max-w-xs">
+                        <option value="">ทุกหมวดหมู่</option>
+                    </select>
+                </div>
+
+                <div class="card overflow-hidden">
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>รหัสวิชา</th>
+                                    <th>ชื่อวิชา</th>
+                                    <th>หมวดหมู่</th>
+                                    <th>ระดับชั้น</th>
+                                    <th>การดำเนินการ</th>
+                                </tr>
+                            </thead>
+                            <tbody id="subjects-tbody">
+                                <tr><td colspan="5">${UI.skeleton(1)}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id="subjects-pagination" class="mt-4"></div>
+            </div>
+        `);
+
+        this.loadSubjectCatalog();
+
+        // Load categories for filter
+        const categoriesRes = await API.request('listSubjectCatalog', { pageSize: 200 });
+        if (categoriesRes.success) {
+            const data = Array.isArray(categoriesRes.data) ? categoriesRes.data : (categoriesRes.data?.data || []);
+            const categories = [...new Set(data.map(s => s.category).filter(Boolean))];
+            const select = document.getElementById('category-filter');
+            categories.forEach(cat => {
+                select.innerHTML += `<option value="${cat}">${Utils.escapeHtml(cat)}</option>`;
+            });
+        }
+
+        document.getElementById('category-filter').onchange = () => {
+            this.loadSubjectCatalog(1, document.getElementById('category-filter').value);
+        };
+
+        document.getElementById('search-subjects').oninput = Utils.debounce((e) => {
+            this.loadSubjectCatalog(1, document.getElementById('category-filter').value, e.target.value);
+        }, 300);
+    },
+
+    async loadSubjectCatalog(page = 1, category = '', search = '') {
+        const res = await API.request('listSubjectCatalog', { page, pageSize: 20, category, search });
+        const tbody = document.getElementById('subjects-tbody');
+
+        const subjects = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+
+        if (!res.success || !subjects.length) {
+            tbody.innerHTML = UI.emptyState('ยังไม่มีรายวิชา', 'เพิ่มรายวิชาเพื่อเริ่มใช้งาน', 5);
+            return;
+        }
+
+        tbody.innerHTML = subjects.map(s => `
+            <tr>
+                <td><span class="font-mono text-sm bg-gray-100 px-2 py-1 rounded">${Utils.escapeHtml(s.subjectCode || '')}</span></td>
+                <td class="font-medium">${Utils.escapeHtml(s.subjectName || '')}</td>
+                <td><span class="badge badge-secondary">${Utils.escapeHtml(s.category || '-')}</span></td>
+                <td>${Utils.escapeHtml(s.gradeLevel || 'ทุกระดับ')}</td>
+                <td>
+                    <div class="flex space-x-1">
+                        <button onclick="Admin.showEditSubjectModal('${s.id}')" class="btn btn-sm btn-secondary">แก้ไข</button>
+                        <button onclick="Admin.deleteSubject('${s.id}')" class="btn btn-sm btn-ghost text-red-600">ลบ</button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+
+        document.getElementById('subjects-pagination').innerHTML = UI.pagination(res.data, (p) => {
+            this.loadSubjectCatalog(p, category, search);
+        });
+    },
+
+    async showCreateSubjectModal() {
+        UI.showModal('เพิ่มรายวิชาใหม่', `
+            <form id="create-subject-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">รหัสวิชา <span class="text-red-500">*</span></label>
+                    <input type="text" name="subjectCode" class="input-field" placeholder="เช่น TH101" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อวิชา <span class="text-red-500">*</span></label>
+                    <input type="text" name="subjectName" class="input-field" placeholder="เช่น ภาษาไทย" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">หมวดหมู่</label>
+                    <input type="text" name="category" class="input-field" placeholder="เช่น กลุ่มสาระภาษาไทย">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
+                    <select name="gradeLevel" class="input-field">
+                        <option value="">ทุกระดับ</option>
+                        <option value="ประถมศึกษา">ประถมศึกษา</option>
+                        <option value="มัธยมศึกษาตอนต้น">มัธยมศึกษาตอนต้น</option>
+                        <option value="มัธยมศึกษาตอนปลาย">มัธยมศึกษาตอนปลาย</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary w-full">บันทึก</button>
+            </form>
+        `);
+
+        document.getElementById('create-subject-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            const res = await API.request('createSubjectCatalog', {
+                subjectCode: fd.get('subjectCode'),
+                subjectName: fd.get('subjectName'),
+                category: fd.get('category'),
+                gradeLevel: fd.get('gradeLevel')
+            });
+
+            if (res.success) {
+                UI.hideModal();
+                UI.showToast('เพิ่มรายวิชาสำเร็จ', 'success');
+                this.loadSubjectCatalog();
+            } else {
+                UI.showToast(res.error, 'error');
+            }
+        };
+    },
+
+    async showEditSubjectModal(subjectId) {
+        // Fetch subject data
+        const res = await API.request('listSubjectCatalog', { pageSize: 200 });
+        const subjects = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+        const subject = subjects.find(s => s.id === subjectId);
+
+        if (!subject) {
+            UI.showToast('ไม่พบรายวิชา', 'error');
+            return;
+        }
+
+        UI.showModal('แก้ไขรายวิชา', `
+            <form id="edit-subject-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">รหัสวิชา</label>
+                    <input type="text" name="subjectCode" class="input-field" value="${Utils.escapeHtml(subject.subjectCode || '')}" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">ชื่อวิชา</label>
+                    <input type="text" name="subjectName" class="input-field" value="${Utils.escapeHtml(subject.subjectName || '')}" required>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">หมวดหมู่</label>
+                    <input type="text" name="category" class="input-field" value="${Utils.escapeHtml(subject.category || '')}">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
+                    <select name="gradeLevel" class="input-field">
+                        <option value="">ทุกระดับ</option>
+                        <option value="ประถมศึกษา" ${subject.gradeLevel === 'ประถมศึกษา' ? 'selected' : ''}>ประถมศึกษา</option>
+                        <option value="มัธยมศึกษาตอนต้น" ${subject.gradeLevel === 'มัธยมศึกษาตอนต้น' ? 'selected' : ''}>มัธยมศึกษาตอนต้น</option>
+                        <option value="มัธยมศึกษาตอนปลาย" ${subject.gradeLevel === 'มัธยมศึกษาตอนปลาย' ? 'selected' : ''}>มัธยมศึกษาตอนปลาย</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary w-full">บันทึกการแก้ไข</button>
+            </form>
+        `);
+
+        document.getElementById('edit-subject-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            const res = await API.request('updateSubjectCatalog', {
+                catalogId: subjectId,
+                subjectCode: fd.get('subjectCode'),
+                subjectName: fd.get('subjectName'),
+                category: fd.get('category'),
+                gradeLevel: fd.get('gradeLevel')
+            });
+
+            if (res.success) {
+                UI.hideModal();
+                UI.showToast('แก้ไขรายวิชาสำเร็จ', 'success');
+                this.loadSubjectCatalog();
+            } else {
+                UI.showToast(res.error, 'error');
+            }
+        };
+    },
+
+    async deleteSubject(subjectId) {
+        if (!confirm('ต้องการลบรายวิชานี้หรือไม่?')) return;
+
+        const res = await API.request('deleteSubjectCatalog', { catalogId: subjectId });
+        if (res.success) {
+            UI.showToast('ลบสำเร็จ', 'success');
+            this.loadSubjectCatalog();
         } else {
             UI.showToast(res.error, 'error');
         }

@@ -125,8 +125,8 @@ function handleRequestCore(action, params) {
      logAction(user.id, action, params.targetType || 'system', params.targetId || '');
   }
 
-  // Security Whitelist
-  const publicActions = ['login', 'register', 'testPopulate', 'setupBackup', 'debugInfo', 'autoRestore'];
+  // Security Whitelist (actions that don't require login)
+  const publicActions = ['login', 'register', 'testPopulate', 'setupBackup', 'debugInfo', 'autoRestore', 'listSubjectTemplates'];
   if (!publicActions.includes(action) && !user) {
      return { success: false, error: 'Unauthorized: Please login first' };
   }
@@ -148,9 +148,9 @@ function handleRequestCore(action, params) {
     case 'updateUser': result = handleUpdateUser(params, user); break;
     
     // --- Admin: Classes ---
-    case 'adminListClasses': result = handleList('Classes', params, ['sort']); break;
-    case 'adminCreateClass': result = handleCreate('Classes', params); break;
-    case 'adminUpdateClass': result = handleUpdate('Classes', { ...params, id: params.classId }); break;
+    case 'adminListClasses': result = handleAdminListClasses(params); break;
+    case 'adminCreateClass': result = handleAdminCreateClass(params); break;
+    case 'adminUpdateClass': result = handleAdminUpdateClass(params); break;
     case 'adminDeleteClass': result = handleDelete('Classes', { id: params.classId }); break;
     
     // --- Admin: Subject Catalog ---
@@ -177,6 +177,7 @@ function handleRequestCore(action, params) {
     case 'assignTeacherToClassSubject': result = handleUpdate('ClassSubjects', { id: params.classSubjectId, teacherId: params.teacherId }); break;
 
     // --- Teacher ---
+    case 'createClass': result = handleCreate('Classes', params); break; // Force add for teacher
     case 'listMyClassSubjects': result = handleListMyClassSubjects(params, user); break;
     case 'createAssignmentV2': result = handleCreate('Assignments', params); break;
     case 'updateAssignment': result = handleUpdate('Assignments', { ...params, id: params.assignmentId }); break;
@@ -203,6 +204,8 @@ function handleRequestCore(action, params) {
     case 'parentLink': result = handleParentLink(params, user); break;
     case 'parentUnlink': result = handleParentUnlink(params, user); break;
     case 'getLinkedStudents': result = handleGetLinkedStudents(params, user); break;
+    case 'parentGetGrades': result = handleParentGetGrades(params, user); break; // Added this Route
+
   }
 
   return result;
@@ -876,7 +879,187 @@ function handleAdminGetDashboardStats() {
 }
 
 function handleListTeachers() { return handleList('Users', { role: 'teacher' }); }
-function handleListMyClassSubjects() { return { success: true, data: [] }; }
+
+// ===== Subject Templates for Teacher Registration =====
+function handleListSubjectTemplates() {
+    const db = getDB();
+    
+    // Get all active subjects from SubjectCatalog
+    let subjects = readSheet(db, 'SubjectCatalog').filter(s => s.isActive !== false);
+    
+    // If no subjects in catalog, return default Thai school subjects
+    if (!subjects || subjects.length === 0) {
+        const defaultSubjects = [
+            { id: 'default_th', subjectCode: 'TH', subjectName: 'ภาษาไทย', category: 'กลุ่มสาระภาษาไทย' },
+            { id: 'default_en', subjectCode: 'EN', subjectName: 'ภาษาอังกฤษ', category: 'กลุ่มสาระภาษาต่างประเทศ' },
+            { id: 'default_ma', subjectCode: 'MA', subjectName: 'คณิตศาสตร์', category: 'กลุ่มสาระคณิตศาสตร์' },
+            { id: 'default_sc', subjectCode: 'SC', subjectName: 'วิทยาศาสตร์', category: 'กลุ่มสาระวิทยาศาสตร์' },
+            { id: 'default_so', subjectCode: 'SO', subjectName: 'สังคมศึกษา', category: 'กลุ่มสาระสังคมศึกษา' },
+            { id: 'default_he', subjectCode: 'HE', subjectName: 'สุขศึกษาและพลศึกษา', category: 'กลุ่มสาระสุขศึกษา' },
+            { id: 'default_ar', subjectCode: 'AR', subjectName: 'ศิลปะ', category: 'กลุ่มสาระศิลปะ' },
+            { id: 'default_ca', subjectCode: 'CA', subjectName: 'การงานอาชีพ', category: 'กลุ่มสาระการงานอาชีพ' },
+            { id: 'default_co', subjectCode: 'CO', subjectName: 'คอมพิวเตอร์', category: 'กลุ่มสาระเทคโนโลยี' }
+        ];
+        return { success: true, data: defaultSubjects };
+    }
+    
+    // Group by category for better organization
+    const grouped = {};
+    subjects.forEach(s => {
+        const cat = s.category || 'ไม่ระบุหมวดหมู่';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push({
+            id: s.id,
+            subjectCode: s.subjectCode || '',
+            subjectName: s.subjectName || '',
+            category: cat
+        });
+    });
+    
+    // Flatten back to array but maintain order
+    const result = [];
+    Object.keys(grouped).sort().forEach(cat => {
+        result.push(...grouped[cat]);
+    });
+    
+    return { success: true, data: result };
+}
+
+// ===== Admin Classes Management (with Join) =====
+function handleAdminListClasses(params) {
+    const db = getDB();
+    let classes = readSheet(db, 'Classes').filter(c => c.isActive !== false);
+    
+    // Get Terms and Users for joining
+    const terms = readSheet(db, 'Terms');
+    const users = readSheet(db, 'Users').filter(u => u.role === 'teacher');
+    
+    // Join Term and Teacher data
+    const enrichedClasses = classes.map(c => {
+        // Find term
+        const term = terms.find(t => t.id === c.termId);
+        // Find teacher
+        const teacher = users.find(u => u.id === c.teacherId || u.id === c.homeroomTeacherId);
+        
+        // Generate name if missing
+        let displayName = c.name;
+        if (!displayName && c.level && c.room) {
+            displayName = c.level + '/' + c.room;
+        }
+        
+        return {
+            ...c,
+            name: displayName || '-',
+            termName: term ? (term.term + '/' + term.academicYear) : '-',
+            teacherName: teacher ? teacher.name : '-'
+        };
+    });
+    
+    // Sorting
+    if (params.sort === 'name') {
+        // Sort by level/room (Thai school order)
+        enrichedClasses.sort((a, b) => {
+            const aName = a.name || '';
+            const bName = b.name || '';
+            return aName.localeCompare(bName, 'th');
+        });
+    } else {
+        // Default: Sort by createdAt DESC
+        enrichedClasses.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+    
+    // Pagination
+    const page = parseInt(params.page) || 1;
+    const pageSize = parseInt(params.pageSize) || 50;
+    const start = (page - 1) * pageSize;
+    const pagedData = enrichedClasses.slice(start, start + pageSize);
+    
+    return { 
+        success: true, 
+        data: pagedData,
+        total: enrichedClasses.length,
+        page,
+        pageSize
+    };
+}
+
+function handleAdminCreateClass(params) {
+    const db = getDB();
+    
+    // Auto-generate name from level + room
+    const name = (params.level && params.room) ? (params.level + '/' + params.room) : '';
+    
+    // Generate unique roomJoinCode
+    let roomJoinCode = 'ROOM' + Math.floor(1000 + Math.random() * 9000);
+    
+    // Check for duplicates
+    const existingClasses = readSheet(db, 'Classes');
+    const existingCodes = existingClasses.map(c => c.roomJoinCode);
+    while (existingCodes.includes(roomJoinCode)) {
+        roomJoinCode = 'ROOM' + Math.floor(1000 + Math.random() * 9000);
+    }
+    
+    // Build new class object
+    const newClass = {
+        id: generateId(),
+        name: name,
+        level: params.level || '',
+        room: params.room || '',
+        termId: params.termId || '',
+        teacherId: params.homeroomTeacherId || params.teacherId || '',
+        roomJoinCode: roomJoinCode,
+        createdAt: new Date().toISOString(),
+        isActive: true
+    };
+    
+    // Insert to sheet
+    const sheet = db.getSheetByName('Classes');
+    if (!sheet) {
+        return { success: false, error: 'ไม่พบ Sheet Classes' };
+    }
+    
+    // Get headers
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (headers.length === 0 || !headers[0]) {
+        // Create headers
+        const defaultHeaders = ['id', 'name', 'level', 'room', 'termId', 'teacherId', 'roomJoinCode', 'createdAt', 'isActive'];
+        sheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
+        headers.push(...defaultHeaders);
+    }
+    
+    // Build row
+    const row = headers.map(h => newClass[h] !== undefined ? newClass[h] : '');
+    sheet.appendRow(row);
+    
+    // Clear cache
+    clearCache('Classes');
+    
+    return { success: true, data: newClass };
+}
+
+function handleAdminUpdateClass(params) {
+    const db = getDB();
+    const classId = params.classId || params.id;
+    
+    if (!classId) {
+        return { success: false, error: 'ไม่ได้ระบุ classId' };
+    }
+    
+    // Build updates
+    const updates = {};
+    if (params.level !== undefined) updates.level = params.level;
+    if (params.room !== undefined) updates.room = params.room;
+    if (params.termId !== undefined) updates.termId = params.termId;
+    if (params.homeroomTeacherId !== undefined) updates.teacherId = params.homeroomTeacherId;
+    if (params.teacherId !== undefined) updates.teacherId = params.teacherId;
+    
+    // Auto-update name if level/room changed
+    if (params.level && params.room) {
+        updates.name = params.level + '/' + params.room;
+    }
+    
+    return handleUpdate('Classes', { ...updates, id: classId });
+}
 
 function handleListClassSubjects(params) {
   const db = getDB();
@@ -897,9 +1080,15 @@ function handleListClassSubjects(params) {
       const subject = catalog.find(s => s.id === item.catalogId) || {};
       const teacher = teachers.find(t => t.id === item.teacherId) || {};
       
+      // Generate className from level/room if name is empty
+      let className = classObj.name;
+      if (!className && classObj.level && classObj.room) {
+          className = classObj.level + '/' + classObj.room;
+      }
+      
       return {
           ...item,
-          className: classObj.name || '',
+          className: className || '-',
           subjectCode: subject.subjectCode || '',
           subjectName: subject.subjectName || '',
           teacherName: teacher.name || ''
@@ -1106,4 +1295,282 @@ function handleGetGradebookData(params, user) {
 }
 
 function restoreFromDrive() { return { success: false, error: "Auto-restore not configured" }; }
+
+// ===== Teacher: My Class Subjects =====
+function handleListMyClassSubjects(params, user) {
+    if (!user || user.role !== 'teacher') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const db = getDB();
+    
+    // Get class subjects where this teacher is assigned
+    let classSubjects = readSheet(db, 'ClassSubjects').filter(cs => 
+        cs.teacherId === user.id && cs.isActive !== false
+    );
+    
+    // Quick Optimization: If no class subjects, return early
+    if (classSubjects.length === 0) return { success: true, data: [] };
+
+    // Get all necessary data ONCE
+    const classes = readSheet(db, 'Classes');
+    const catalog = readSheet(db, 'SubjectCatalog');
+    const allAssignments = readSheet(db, 'Assignments'); // Read once!
+    
+    // Enrich with class and subject info
+    const enriched = classSubjects.map(cs => {
+        const classObj = classes.find(c => c.id === cs.classId) || {};
+        const subject = catalog.find(c => c.id === cs.catalogId) || {};
+        
+        // Generate className from level/room if name is empty
+        let className = classObj.name;
+        if (!className && classObj.level && classObj.room) {
+            className = classObj.level + '/' + classObj.room;
+        }
+        
+        // Count assignments from pre-loaded list
+        const assignmentCount = allAssignments.filter(a => 
+            a.classSubjectId === cs.id && a.isActive !== false
+        ).length;
+        
+        return {
+            ...cs,
+            className: className || '-',
+            classLevel: classObj.level || '',
+            classRoom: classObj.room || '',
+            subjectCode: subject.subjectCode || '',
+            subjectName: subject.subjectName || '',
+            category: subject.category || '',
+            assignmentCount: assignmentCount
+        };
+    });
+    
+    return { success: true, data: enriched };
+}
+
+// ===== Parent: Link to Student =====
+function handleParentLink(params, user) {
+    if (!user || user.role !== 'parent') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const db = getDB();
+    const { linkCode, studentId } = params;
+    
+    // Find student by linkCode or studentId
+    let student = null;
+    if (linkCode) {
+        student = readSheet(db, 'Users').find(u => 
+            u.linkCode === linkCode && u.role === 'student' && u.isActive !== false
+        );
+    } else if (studentId) {
+        student = findRow(db, 'Users', 'id', studentId);
+    }
+    
+    if (!student) {
+        return { success: false, error: 'ไม่พบนักเรียน กรุณาตรวจสอบรหัสเชื่อมต่อ' };
+    }
+    
+    // Check if already linked
+    const existingLinks = readSheet(db, 'ParentStudentLinks').filter(l => 
+        l.parentId === user.id && l.studentId === student.id && l.isActive !== false
+    );
+    if (existingLinks.length > 0) {
+        return { success: false, error: 'คุณเชื่อมต่อกับนักเรียนคนนี้แล้ว' };
+    }
+    
+    // Create link
+    const newLink = {
+        id: generateId(),
+        parentId: user.id,
+        studentId: student.id,
+        createdAt: new Date().toISOString(),
+        isActive: true
+    };
+    
+    const result = handleCreate('ParentStudentLinks', newLink);
+    if (result.success) {
+        return { success: true, data: { studentName: student.name, studentId: student.id } };
+    }
+    return result;
+}
+
+// ===== Parent: Unlink from Student =====
+function handleParentUnlink(params, user) {
+    if (!user || user.role !== 'parent') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const db = getDB();
+    const { studentId, linkId } = params;
+    
+    // Find the link
+    const links = readSheet(db, 'ParentStudentLinks').filter(l => 
+        l.parentId === user.id && 
+        (l.studentId === studentId || l.id === linkId) && 
+        l.isActive !== false
+    );
+    
+    if (links.length === 0) {
+        return { success: false, error: 'ไม่พบการเชื่อมต่อนี้' };
+    }
+    
+    // Soft delete the link
+    return handleUpdate('ParentStudentLinks', { id: links[0].id, isActive: false });
+}
+
+// ===== Parent: Get Linked Students =====
+function handleGetLinkedStudents(params, user) {
+    if (!user || user.role !== 'parent') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const db = getDB();
+    
+    // Get all active links for this parent
+    const links = readSheet(db, 'ParentStudentLinks').filter(l => 
+        l.parentId === user.id && l.isActive !== false
+    );
+    
+    // Get student info
+    const users = readSheet(db, 'Users');
+    const classes = readSheet(db, 'Classes');
+    
+    const linkedStudents = links.map(link => {
+        const student = users.find(u => u.id === link.studentId);
+        if (!student) return null;
+        
+        // Get student's class
+        const classObj = classes.find(c => c.id === student.primaryClassId);
+        let className = classObj?.name;
+        if (!className && classObj?.level && classObj?.room) {
+            className = classObj.level + '/' + classObj.room;
+        }
+        
+        return {
+            linkId: link.id,
+            studentId: student.id,
+            studentName: student.name,
+            studentEmail: student.email,
+            className: className || '-',
+            linkedAt: link.createdAt
+        };
+    }).filter(Boolean);
+    
+    return { success: true, data: linkedStudents };
+}
+
+// ===== Parent: Get Student Grades =====
+function handleParentGetGrades(params, user) {
+    if (!user || user.role !== 'parent') {
+        return { success: false, error: 'Unauthorized' };
+    }
+
+    const db = getDB();
+    const studentId = params.studentId;
+
+    // 1. Security Check: Is Parent Linked to Student?
+    const isLinked = readSheet(db, 'ParentStudentLinks').some(l => 
+        l.parentId === user.id && l.studentId === studentId && l.isActive !== false
+    );
+
+    if (!isLinked) {
+        return { success: false, error: 'Student not linked to this parent' };
+    }
+
+    // 2. Get Submissions, Assignments, Subjects (Optimized: Read All Once)
+    const submissions = readSheet(db, 'Submissions').filter(s => 
+        s.studentId === studentId && s.isActive !== false
+    );
+    
+    // Get Assignments relevant to these submissions OR pending assignments
+    // Ideally we should get student's class -> class subjects -> assignments
+    
+    // Step 2.1: Get Student's Class Assignments
+    // We need to know which class/subjects the student is in to show "Missing" assignments too
+    const student = readSheet(db, 'Users').find(u => u.id === studentId);
+    if (!student) return { success: false, data: [] };
+
+    // Find assignments assigned to student's class-subjects
+    // This is complex because assignments are linked to ClassSubjects
+    // And student is in a Class (primaryClassId) or enrolled in ClassSubjects
+    
+    // Simplified Logic: 
+    // 1. Get all assignments where classSubject match student's enrolled subjects 
+    // BUT we don't have enrollment table fully utilized yet.
+    // Let's rely on: Assignments linked to student's primary class subjects?
+    // OR just list submissions and populate assignment details?
+    // Parent Dashboard shows "Pending Work" so we need assignments that are NOT submitted too.
+    
+    // For now, let's fetch ALL active assignments and filter by student's context
+    // NOTE: This assumes we can identify relevant assignments. 
+    // If difficult, let's just return submissions + assignments that have submissions first.
+    // To support "Pending", we really need enrollment logic.
+    
+    // Let's try to get ClassSubjects for the student's class
+    const classSubjects = readSheet(db, 'ClassSubjects').filter(cs => cs.classId === student.primaryClassId);
+    const classSubjectIds = classSubjects.map(cs => cs.id);
+    
+    const allAssignments = readSheet(db, 'Assignments').filter(a => 
+        classSubjectIds.includes(a.classSubjectId) && a.isActive !== false
+    );
+
+    const catalog = readSheet(db, 'SubjectCatalog');
+
+    // 3. Merge Data
+    const results = allAssignments.map(assign => {
+        const submission = submissions.find(s => s.assignmentId === assign.id);
+        const cs = classSubjects.find(c => c.id === assign.classSubjectId);
+        const subject = catalog.find(c => c.id === cs?.catalogId);
+
+        // Grade info
+        let grade = null;
+        if (submission && submission.grade) {
+             try { grade = JSON.parse(submission.grade); } catch(e) {}
+        }
+        
+        return {
+            assignment: {
+                id: assign.id,
+                title: assign.title,
+                maxScore: assign.maxScore,
+                dueDate: assign.dueDate
+            },
+            submission: submission ? {
+                id: submission.id,
+                status: submission.status,
+                submittedAt: submission.submittedAt,
+                version: submission.version
+            } : null,
+            grade: grade, // { score, feedback, gradedAt }
+            subjectName: subject ? subject.subjectName : (cs?.className || 'Unknown Subject'),
+            classSubjectId: assign.classSubjectId
+        };
+    });
+
+    // Sort by due date desc
+    results.sort((a, b) => new Date(b.assignment.dueDate) - new Date(a.assignment.dueDate));
+
+    return { success: true, data: results };
+}
+
+// ===== Create Term (Admin) =====
+function handleCreateTerm(params, user) {
+    if (!user || user.role !== 'admin') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const newTerm = {
+        id: generateId(),
+        term: params.term || '1',
+        academicYear: params.academicYear || (new Date().getFullYear() + 543).toString(),
+        startDate: params.startDate || '',
+        endDate: params.endDate || '',
+        isCurrent: params.isCurrent || false,
+        createdAt: new Date().toISOString(),
+        isActive: true
+    };
+    
+    return handleCreate('Terms', newTerm);
+}
 
