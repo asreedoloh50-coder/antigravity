@@ -22,6 +22,8 @@ const SPREADSHEET_ID = '1JCwuRiAALB9UE_w4w44hZ88fpOp3OAz0GiIB0y4oypU'; // Exact 
 /**
  * Return the Spreadsheet object.
  */
+
+
 function getDB() {
   if (SPREADSHEET_ID) {
     try {
@@ -199,15 +201,25 @@ function doPost(e) {
        logAction(user.id, action, params.targetType || 'system', params.targetId || '');
     }
 
+    // === SECURITY: Action Whitelist & Auth Check ===
+    const publicActions = ['login', 'register', 'testPopulate', 'setupBackup', 'debugInfo', 'autoRestore'];
+    if (!publicActions.includes(action) && !user) {
+        return ContentService.createTextOutput(JSON.stringify({ 
+            success: false, error: 'Unauthorized: Please login first', requestId: params.requestId 
+        })).setMimeType(ContentService.MimeType.JSON);
+    }
+    // ===============================================
+
     let result = { success: false, error: "Action not found" };
 
     switch (action) {
       // --- Auth ---
+      // --- Auth ---
       case 'login': result = handleLogin(params); break;
       case 'register': result = handleRegister(params); break;
       case 'updateProfile': result = handleUpdateProfile(params, user); break;
-      case 'me': result = { success: true, data: { user } }; break;
-      case 'autoRestore': result = restoreFromDrive(); break; // New Auto-Restore Endpoint
+      case 'me': result = { success: true, data: { user: utils_sanitizeUser(user) } }; break;
+      case 'autoRestore': result = restoreFromDrive(); break;
 
       // --- Admin: Users ---
       case 'listUsers': result = handleListUsers(params); break;
@@ -301,7 +313,9 @@ function handleLogin(params) {
   const { email, password } = params;
   const db = getDB();
   const userData = findRow(db, 'Users', 'email', email);
-  if (!userData || userData.passwordHash !== password) { 
+  
+  // Verify using Hash
+  if (!userData || userData.passwordHash !== utils_hashPassword(password)) { 
     return { success: false, error: 'อีเมลหรือรหัสผ่านไม่ถูกต้อง' };
   }
   const token = 'tok_' + new Date().getTime() + '_' + Math.random().toString(36).substr(2);
@@ -317,7 +331,7 @@ function handleLogin(params) {
       isActive: true
   });
   
-  return { success: true, data: { user: userData, token, expiresAt } };
+  return { success: true, data: { user: utils_sanitizeUser(userData), token, expiresAt } };
 }
 
 function handleRegister(params) {
@@ -344,7 +358,7 @@ function handleRegister(params) {
   const newUser = {
     id: id || 'user_' + new Date().getTime(),
     email, name, role,
-    passwordHash: password,
+    passwordHash: utils_hashPassword(password), // Hash It!
     primaryClassId: finalClassId,
     teacherProfileJSON: teacherSubjects ? JSON.stringify({ preferredSubjects: teacherSubjects }) : '',
     createdAt: new Date().toISOString(),
@@ -356,7 +370,7 @@ function handleRegister(params) {
      createRow(db, 'Enrollments', { id: Utils_genId(), classId: finalClassId, studentId: newUser.id, createdAt: newUser.createdAt, isActive: true });
   }
 
-  return { success: true, data: { user: newUser } };
+  return { success: true, data: { user: utils_sanitizeUser(newUser) } };
 }
 
 function handleUpdateProfile(params, user) {
@@ -379,10 +393,10 @@ function testPopulateData() {
 
   // 1. Users
   const users = [
-    { id:'u1', name:'ครูสมศรี', email:'teacher@demo.com', role:'teacher', createdAt:now, isActive:true, passwordHash: '1234' },
-    { id:'u2', name:'ด.ช.มานะ', email:'student@demo.com', role:'student', createdAt:now, isActive:true, passwordHash: '1234' },
-    { id:'u3', name:'ผู้ปกครอง', email:'parent@demo.com', role:'parent', createdAt:now, isActive:true, passwordHash: '1234' },
-    { id:'admin1', name:'Admin', email:'admin@demo.com', role:'admin', createdAt:now, isActive:true, passwordHash: '1234' }
+    { id:'u1', name:'ครูสมศรี', email:'teacher@demo.com', role:'teacher', createdAt:now, isActive:true, passwordHash: utils_hashPassword('1234') },
+    { id:'u2', name:'ด.ช.มานะ', email:'student@demo.com', role:'student', createdAt:now, isActive:true, passwordHash: utils_hashPassword('1234') },
+    { id:'u3', name:'ผู้ปกครอง', email:'parent@demo.com', role:'parent', createdAt:now, isActive:true, passwordHash: utils_hashPassword('1234') },
+    { id:'admin1', name:'Admin', email:'admin@demo.com', role:'admin', createdAt:now, isActive:true, passwordHash: utils_hashPassword('1234') }
   ];
   users.forEach(u=> { if(!findRow(db, 'Users', 'email', u.email)) createRow(db,'Users',u); });
 
@@ -427,7 +441,7 @@ function testPopulateData() {
 
 function handleListUsers(params) {
     const db = getDB();
-    let users = readSheet(db, 'Users');
+    let users = readSheet(db, 'Users').map(u => utils_sanitizeUser(u));
     
     if (params.roleFilter) users = users.filter(u => u.role === params.roleFilter);
     if (params.query) {
@@ -721,7 +735,33 @@ function findUserByToken(token) {
     return user && user.isActive ? user : null;
 }
 
+// ===== UTILS & SECURITY =====
+
 function Utils_genId() { return 'id_' + Math.random().toString(36).substr(2, 9); }
+
+function utils_hashPassword(password) {
+  if (!password) return '';
+  const rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, password);
+  let txtHash = '';
+  for (let i = 0; i < rawHash.length; i++) {
+    let hashVal = rawHash[i];
+    if (hashVal < 0) {
+      hashVal += 256;
+    }
+    if (hashVal.toString(16).length == 1) {
+      txtHash += '0';
+    }
+    txtHash += hashVal.toString(16);
+  }
+  return txtHash;
+}
+
+function utils_sanitizeUser(user) {
+    if (!user) return null;
+    const safeUser = { ...user };
+    delete safeUser.passwordHash; // REMOVE PASSWORD HASH
+    return safeUser;
+}
 
 function handleListClassSubjects(params) {
   const db = getDB();
