@@ -51,21 +51,21 @@ const API = {
         const requestId = this.generateRequestId();
 
         // 1. Check Client Cache for Read Actions
+        // Optimized: Cache more heavy lists to make UI snappy
         const CACHEABLE_ACTIONS = [
             'listSubjectCatalog', 'listClasses',
             'listTeachers', 'listTerms', 'listSubjectTemplates',
-            'adminGetDashboardStats', 'getTeacherDashboardStats', 'getStudentDashboardStats'
+            'adminGetDashboardStats', 'getTeacherDashboardStats', 'getStudentDashboardStats',
+            'listUsers', 'getAuditLogs', 'listAssignments', 'listSubmissionsByAssignment'
         ];
 
-        // Only cache if no special params (like searches) to keep it simple, or simply cache based on full params signature
-        // For simplicity: Cache only "listAll" type requests (empty params or just page=1)
-        // Actually, let's cache based on action+query
+        // Only cache if no special params (like searches) OR simplify to cache unique queries
         const cacheKey = action + JSON.stringify(params);
 
         if (mode !== 'demo' && CACHEABLE_ACTIONS.includes(action)) {
             const cached = this.ClientCache.get(cacheKey);
             if (cached) {
-                console.log('⚡ Using Client Cache:', action);
+                // console.log('⚡ Using Client Cache:', action);
                 return { ...cached, requestId, fromCache: true };
             }
         }
@@ -76,9 +76,18 @@ const API = {
         } else {
             response = await this.apiRequest(action, params, requestId);
 
-            // 2. Save to Client Cache if success
-            if (response.success && CACHEABLE_ACTIONS.includes(action)) {
-                this.ClientCache.set(cacheKey, response);
+            if (response.success) {
+                // 2. Save to Client Cache if Read
+                if (CACHEABLE_ACTIONS.includes(action)) {
+                    this.ClientCache.set(cacheKey, response);
+                } else {
+                    // 3. Auto-Invalidate Cache on Write (Write-Through)
+                    // If we successfully did an action NOT in the read-list, 
+                    // assume it modified data and clear cache to prevent stale data.
+                    // This creates a "Fresh on Edit / Fast on View" experience.
+                    // console.log('🧹 Clearing Client Cache due to Write Action:', action);
+                    this.ClientCache.clear();
+                }
             }
         }
         return response;
