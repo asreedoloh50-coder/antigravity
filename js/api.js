@@ -53,7 +53,8 @@ const API = {
         // 1. Check Client Cache for Read Actions
         const CACHEABLE_ACTIONS = [
             'listSubjectCatalog', 'listClasses',
-            'listTeachers', 'listTerms', 'listSubjectTemplates'
+            'listTeachers', 'listTerms', 'listSubjectTemplates',
+            'adminGetDashboardStats', 'getTeacherDashboardStats', 'getStudentDashboardStats'
         ];
 
         // Only cache if no special params (like searches) to keep it simple, or simply cache based on full params signature

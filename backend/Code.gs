@@ -736,7 +736,31 @@ function handleListSubjectTemplates() {
 function handleAdminGetDashboardStats() {
     const db = getDB();
     const users = readSheet(db, 'Users').filter(u => u.isActive);
-    const logs = readSheet(db, 'AuditLogs'); // We might want to limit this read if logs are huge
+    
+    // Optimize AuditLogs Read: Read only last 50 rows instead of full sheet
+    let recentLogs = [];
+    const sheet = db.getSheetByName('AuditLogs');
+    if (sheet) {
+        const lastRow = sheet.getLastRow();
+        if (lastRow > 1) {
+             const limit = 50; // Read last 50 rows
+             const startRow = Math.max(2, lastRow - limit + 1); // Start after header (row 1)
+             const numRows = lastRow - startRow + 1;
+             
+             if (numRows > 0) {
+                 // Get Headers
+                 const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+                 // Get Data
+                 const values = sheet.getRange(startRow, 1, numRows, sheet.getLastColumn()).getValues();
+                 
+                 recentLogs = values.map(row => {
+                      let obj = {};
+                      headers.forEach((h, i) => obj[h] = row[i]);
+                      return obj;
+                 });
+             }
+        }
+    }
     
     // Simple Counts
     const stats = {
@@ -746,10 +770,9 @@ function handleAdminGetDashboardStats() {
         parents: users.filter(u => u.role === 'parent').length
     };
     
-    // Recent logs (Last 5)
-    // Assuming logs are appended, so last rows are newest. 
-    // If we want accurate sort by timestamp, we should sort.
-    const recentLogs = logs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5);
+    // Sort & Slice
+    // Logs are usually chronological, but just in case
+    recentLogs = recentLogs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 5);
 
     return { success: true, data: { stats, recentLogs } };
 }
