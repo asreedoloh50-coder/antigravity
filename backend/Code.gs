@@ -811,8 +811,22 @@ function handleRestoreData() { return { success: false, error: 'Not implemented'
 function handleBackupData() { return { success: false, error: 'Not implemented' }; }
 function handleListSubjectTemplates() {
   const db = getDB();
-  const catalog = readSheet(db, 'SubjectCatalog').filter(c => c.isActive);
+  const catalog = readSheet(db, 'SubjectCatalog').filter(c => c.isActive !== false);
   
+  // Standard Category Order
+  const categoryOrder = [
+    'กลุ่มสาระภาษาไทย',
+    'กลุ่มสาระคณิตศาสตร์',
+    'กลุ่มสาระวิทยาศาสตร์และเทคโนโลยี',
+    'กลุ่มสาระสังคมศึกษา ศาสนา และวัฒนธรรม',
+    'กลุ่มสาระสุขศึกษาและพลศึกษา',
+    'กลุ่มสาระศิลปะ',
+    'กลุ่มสาระการงานอาชีพ',
+    'กลุ่มสาระภาษาต่างประเทศ',
+    'กิจกรรมพัฒนาผู้เรียน',
+    'อื่นๆ'
+  ];
+
   // Group by Category
   const grouped = {};
   catalog.forEach(item => {
@@ -825,11 +839,25 @@ function handleListSubjectTemplates() {
     });
   });
 
+  // Sort Groups
+  const sortedGrouped = {};
+  // 1. Add known categories in order
+  categoryOrder.forEach(cat => {
+    if (grouped[cat]) {
+      sortedGrouped[cat] = grouped[cat];
+      delete grouped[cat];
+    }
+  });
+  // 2. Add remaining categories (custom ones)
+  Object.keys(grouped).sort().forEach(cat => {
+    sortedGrouped[cat] = grouped[cat];
+  });
+
   return { 
     success: true, 
     data: {
       templates: catalog.map(c => ({ id: c.id, name: c.subjectName, code: c.subjectCode })),
-      grouped: grouped
+      grouped: sortedGrouped
     } 
   };
 }

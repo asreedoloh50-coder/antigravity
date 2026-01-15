@@ -1392,7 +1392,19 @@ const Admin = {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">หมวดหมู่</label>
-                    <input type="text" name="category" class="input-field" placeholder="เช่น กลุ่มสาระภาษาไทย">
+                    <select name="category" class="input-field">
+                        <option value="">-- เลือกหมวดหมู่ --</option>
+                        <option value="กลุ่มสาระภาษาไทย">กลุ่มสาระภาษาไทย</option>
+                        <option value="กลุ่มสาระคณิตศาสตร์">กลุ่มสาระคณิตศาสตร์</option>
+                        <option value="กลุ่มสาระวิทยาศาสตร์และเทคโนโลยี">กลุ่มสาระวิทยาศาสตร์และเทคโนโลยี</option>
+                        <option value="กลุ่มสาระสังคมศึกษา ศาสนา และวัฒนธรรม">กลุ่มสาระสังคมศึกษา ศาสนา และวัฒนธรรม</option>
+                        <option value="กลุ่มสาระสุขศึกษาและพลศึกษา">กลุ่มสาระสุขศึกษาและพลศึกษา</option>
+                        <option value="กลุ่มสาระศิลปะ">กลุ่มสาระศิลปะ</option>
+                        <option value="กลุ่มสาระการงานอาชีพ">กลุ่มสาระการงานอาชีพ</option>
+                        <option value="กลุ่มสาระภาษาต่างประเทศ">กลุ่มสาระภาษาต่างประเทศ</option>
+                        <option value="กิจกรรมพัฒนาผู้เรียน">กิจกรรมพัฒนาผู้เรียน</option>
+                        <option value="อื่นๆ">อื่นๆ</option>
+                    </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
@@ -1438,6 +1450,23 @@ const Admin = {
             return;
         }
 
+        const categories = [
+            'กลุ่มสาระภาษาไทย',
+            'กลุ่มสาระคณิตศาสตร์',
+            'กลุ่มสาระวิทยาศาสตร์และเทคโนโลยี',
+            'กลุ่มสาระสังคมศึกษา ศาสนา และวัฒนธรรม',
+            'กลุ่มสาระสุขศึกษาและพลศึกษา',
+            'กลุ่มสาระศิลปะ',
+            'กลุ่มสาระการงานอาชีพ',
+            'กลุ่มสาระภาษาต่างประเทศ',
+            'กิจกรรมพัฒนาผู้เรียน',
+            'อื่นๆ'
+        ];
+
+        const categoryOptions = categories.map(cat =>
+            `<option value="${cat}" ${subject.category === cat ? 'selected' : ''}>${cat}</option>`
+        ).join('');
+
         UI.showModal('แก้ไขรายวิชา', `
             <form id="edit-subject-form" class="space-y-4">
                 <div>
@@ -1450,7 +1479,10 @@ const Admin = {
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">หมวดหมู่</label>
-                    <input type="text" name="category" class="input-field" value="${Utils.escapeHtml(subject.category || '')}">
+                    <select name="category" class="input-field">
+                        <option value="">-- เลือกหมวดหมู่ --</option>
+                        ${categoryOptions}
+                    </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">ระดับชั้น</label>
