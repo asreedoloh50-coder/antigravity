@@ -39,7 +39,7 @@ const API = {
 
             const response = await fetch(this.BASE_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // Prevent CORS Preflight
+                // headers: { 'Content-Type': 'application/json' }, // Google Apps Script Web App default handling
                 body: JSON.stringify(payload)
             });
 
