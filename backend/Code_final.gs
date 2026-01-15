@@ -603,77 +603,15 @@ function testPopulateData() {
   const db = getDB();
   setupSheets(db);
   
-  // 1. Users
-  const users = [
-    { id:'admin1', email:'admin@demo.com', password:'1234', name:'ผู้ดูแลระบบ', role:'admin' },
-    { id:'u_t1', email:'teacher@demo.com', password:'1234', name:'ครูสมศรี ใจดี', role:'teacher' },
-    { id:'u_t2', email:'teacher2@demo.com', password:'1234', name:'ครูมานี มีสุข', role:'teacher' },
-    { id:'u_s1', email:'student@demo.com', password:'1234', name:'ด.ช.สมชาย เรียนเก่ง', role:'student' },
-    { id:'u_p1', email:'parent@demo.com', password:'1234', name:'ผู้ปกครองสมชาย', role:'parent' }
-  ];
-  
-  users.forEach(u => {
-    if (!fastFindUser(db, u.email)) {
-      handleRegister(u);
-    }
-  });
+  // Create Default Admin/Teacher if not exist
+  if (!fastFindUser(db, 'admin@demo.com')) {
+      handleRegister({ id:'admin1', email:'admin@demo.com', password:'1234', name:'Admin', role:'admin' });
+  }
+  if (!fastFindUser(db, 'student@demo.com')) {
+      handleRegister({ id:'u2', email:'student@demo.com', password:'1234', name:'ด.ช.มานะ', role:'student', level:'ม.1', room:'1' });
+  }
 
-  // 2. Terms
-  const year = new Date().getFullYear();
-  const yearBE = year + 543;
-  const terms = [
-      { id: 'term_1', academicYear: String(yearBE), term: '1', startDate: `${year}-05-16`, endDate: `${year}-10-10`, isActive: true },
-      { id: 'term_2', academicYear: String(yearBE), term: '2', startDate: `${year}-11-01`, endDate: `${year+1}-03-31`, isActive: true }
-  ];
-  ensureData(db, 'Terms', 'id', terms);
-
-  // 3. Subject Catalog
-  const catalog = [
-      { id: 'cat_1', subjectCode: 'ท11101', subjectName: 'ภาษาไทย 1', levelGroup: 'ป.1', category: 'ภาษา', createdAt: new Date().toISOString(), isActive: true },
-      { id: 'cat_2', subjectCode: 'ค11101', subjectName: 'คณิตศาสตร์ 1', levelGroup: 'ป.1', category: 'วิทย์-คณิต', createdAt: new Date().toISOString(), isActive: true },
-      { id: 'cat_3', subjectCode: 'ว11101', subjectName: 'วิทยาศาสตร์ 1', levelGroup: 'ป.1', category: 'วิทย์-คณิต', createdAt: new Date().toISOString(), isActive: true }
-  ];
-  ensureData(db, 'SubjectCatalog', 'id', catalog);
-
-  // 4. Classes
-  const classes = [
-      { id: 'class_1', name: 'ป.1/1', level: 'ป.1', room: '1', roomJoinCode: 'ROOM11', teacherId: 'u_t1', termId: 'term_1', createdAt: new Date().toISOString(), isActive: true }
-  ];
-  ensureData(db, 'Classes', 'id', classes);
-
-  // 5. Class Subjects (Assign Subjects to Class)
-  const classSubjects = [
-      { id: 'cs_1', classId: 'class_1', catalogId: 'cat_1', teacherId: 'u_t1', createdAt: new Date().toISOString(), isActive: true }, // Thai by T1
-      { id: 'cs_2', classId: 'class_1', catalogId: 'cat_2', teacherId: 'u_t2', createdAt: new Date().toISOString(), isActive: true }  // Math by T2
-  ];
-  ensureData(db, 'ClassSubjects', 'id', classSubjects);
-
-  // 6. Enrollments
-  const enrollments = [
-      { id: 'en_1', classId: 'class_1', studentId: 'u_s1', createdAt: new Date().toISOString(), isActive: true }
-  ];
-  ensureData(db, 'Enrollments', 'id', enrollments);
-
-  // 7. Assignments
-  const assignments = [
-      { id: 'hw_1', subjectId: '', classSubjectId: 'cs_1', title: 'การบ้านภาษาไทย บทที่ 1', detail: 'คัดไทย 1 หน้า', dueDate: new Date(Date.now() + 86400000).toISOString(), maxScore: 10, rubricJSON: '[]', filesJSON: '[]', createdAt: new Date().toISOString(), isActive: true }
-  ];
-  ensureData(db, 'Assignments', 'id', assignments);
-
-  clearCache('Users');
-  
-  return { success: true, message: 'Full Database populated successfully', databaseUrl: db.getUrl() };
-}
-
-function ensureData(db, sheetName, keyField, dataArray) {
-    const existing = readSheet(db, sheetName);
-    const existingIds = new Set(existing.map(e => e[keyField]));
-    
-    dataArray.forEach(item => {
-        if (!existingIds.has(item[keyField])) {
-            createRow(db, sheetName, item);
-        }
-    });
+  return { success: true, message: 'Database populated successfully', databaseUrl: db.getUrl() };
 }
 
 function setupSheets(ss) {

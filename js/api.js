@@ -10,16 +10,77 @@ const API = {
         return 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     },
 
+    // --- Client Cache Strategy ---
+    ClientCache: {
+        CACHE_PREFIX: 'api_cache_',
+        TTL: 300000, // 5 Minutes
+
+        get(key) {
+            try {
+                const item = localStorage.getItem(this.CACHE_PREFIX + key);
+                if (!item) return null;
+                const parsed = JSON.parse(item);
+                if (Date.now() > parsed.expiry) {
+                    localStorage.removeItem(this.CACHE_PREFIX + key);
+                    return null;
+                }
+                return parsed.data;
+            } catch (e) { return null; }
+        },
+
+        set(key, data) {
+            try {
+                const payload = {
+                    data,
+                    expiry: Date.now() + this.TTL
+                };
+                localStorage.setItem(this.CACHE_PREFIX + key, JSON.stringify(payload));
+            } catch (e) { /* Storage full */ }
+        },
+
+        clear() {
+            Object.keys(localStorage).forEach(k => {
+                if (k.startsWith(this.CACHE_PREFIX)) localStorage.removeItem(k);
+            });
+        }
+    },
+
     // Main request handler
     async request(action, params = {}) {
         const mode = Store.getMode();
         const requestId = this.generateRequestId();
 
-        if (mode === 'demo') {
-            return this.demoRequest(action, params, requestId);
-        } else {
-            return this.apiRequest(action, params, requestId);
+        // 1. Check Client Cache for Read Actions
+        const CACHEABLE_ACTIONS = [
+            'listSubjectCatalog', 'listClasses',
+            'listTeachers', 'listTerms', 'listSubjectTemplates'
+        ];
+
+        // Only cache if no special params (like searches) to keep it simple, or simply cache based on full params signature
+        // For simplicity: Cache only "listAll" type requests (empty params or just page=1)
+        // Actually, let's cache based on action+query
+        const cacheKey = action + JSON.stringify(params);
+
+        if (mode !== 'demo' && CACHEABLE_ACTIONS.includes(action)) {
+            const cached = this.ClientCache.get(cacheKey);
+            if (cached) {
+                console.log('⚡ Using Client Cache:', action);
+                return { ...cached, requestId, fromCache: true };
+            }
         }
+
+        let response;
+        if (mode === 'demo') {
+            response = await this.demoRequest(action, params, requestId);
+        } else {
+            response = await this.apiRequest(action, params, requestId);
+
+            // 2. Save to Client Cache if success
+            if (response.success && CACHEABLE_ACTIONS.includes(action)) {
+                this.ClientCache.set(cacheKey, response);
+            }
+        }
+        return response;
     },
 
     // Real API request
