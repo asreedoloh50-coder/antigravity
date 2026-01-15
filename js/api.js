@@ -39,14 +39,15 @@ const API = {
 
             const response = await fetch(this.BASE_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // Prevent CORS Preflight
                 body: JSON.stringify(payload)
             });
 
             const data = await response.json();
             return { ...data, requestId };
         } catch (error) {
-            return { success: false, error: 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้', requestId };
+            console.error('API Error:', error);
+            return { success: false, error: 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้: ' + error.message, requestId };
         }
     },
 
