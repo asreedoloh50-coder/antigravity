@@ -837,20 +837,20 @@ function handleListSubjectTemplates() {
   // Group by Category
   const grouped = {};
   catalog.forEach(item => {
-    // Robust name/code getter
-    const name = item.subjectName || item.name || 'วิชาไม่ระบุชื่อ';
-    const code = item.subjectCode || item.code || '';
-    const cat = item.category || 'อื่นๆ';
+    // Robust name/code getter (Supports English and Thai headers)
+    const name = item.subjectName || item.name || item['ชื่อวิชา'] || item['ชื่อ'] || 'วิชาไม่ระบุชื่อ';
+    const code = item.subjectCode || item.code || item['รหัสวิชา'] || item['รหัส'] || '';
+    const cat = item.category || item['หมวดหมู่'] || item['กลุ่มสาระ'] || 'อื่นๆ';
     
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push({
-       id: item.id,
+       id: item.id || Utils_genId(), // Generate ID if missing
        name: name,
        code: code
     });
   });
 
-  // Sort Groups
+  // Sort Groups (Restored)
   const sortedGrouped = {};
   // 1. Add known categories in order
   categoryOrder.forEach(cat => {
@@ -868,9 +868,9 @@ function handleListSubjectTemplates() {
     success: true, 
     data: {
       templates: catalog.map(c => ({ 
-          id: c.id, 
-          name: c.subjectName || c.name || 'Unknown', 
-          code: c.subjectCode || c.code || '' 
+          id: c.id || Utils_genId(), 
+          name: c.subjectName || c.name || c['ชื่อวิชา'] || c['ชื่อ'] || 'Unknown', 
+          code: c.subjectCode || c.code || c['รหัสวิชา'] || c['รหัส'] || '' 
       })),
       grouped: sortedGrouped
     } 
