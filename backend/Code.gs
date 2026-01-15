@@ -213,11 +213,26 @@ function handleRequestCore(action, params) {
 // ==========================================
 
 // --- Caching System ---
+// --- Advanced Caching System (Chunked) ---
 const AC_CACHE = CacheService.getScriptCache();
-const CACHE_TTL = 3600; // 1 Hour
+const CACHE_TTL = 21600; // 6 Hours (Increased)
 
 function getCache(key) {
   try {
+    // 1. Check for Chunked Metadata
+    const metaJson = AC_CACHE.get(key + '_meta');
+    if (metaJson) {
+      const meta = JSON.parse(metaJson);
+      let fullJson = '';
+      for (let i = 0; i < meta.chunks; i++) {
+        const chunk = AC_CACHE.get(key + '_' + i);
+        if (!chunk) return null; // Missing chunk = Cache Miss
+        fullJson += chunk;
+      }
+      return JSON.parse(fullJson);
+    }
+    
+    // 2. Check Legacy (Single Key) - Fallback
     const cached = AC_CACHE.get(key);
     return cached ? JSON.parse(cached) : null;
   } catch (e) { return null; }
@@ -225,17 +240,39 @@ function getCache(key) {
 
 function setCache(key, data) {
   try {
-    // Safety check: CacheService limit is 100KB
-    const payload = JSON.stringify(data);
-    if (payload.length < 95000) {
-      AC_CACHE.put(key, payload, CACHE_TTL);
+    const json = JSON.stringify(data);
+    const chunkSize = 90000; // Safe limit under 100KB
+    
+    if (json.length <= chunkSize) {
+      // Small data: Store directly
+      AC_CACHE.put(key, json, CACHE_TTL);
+      // Remove meta if exists (cleanup)
+      AC_CACHE.remove(key + '_meta');
+    } else {
+      // Large data: Chunk it
+      const chunkCount = Math.ceil(json.length / chunkSize);
+      for (let i = 0; i < chunkCount; i++) {
+        const chunk = json.substr(i * chunkSize, chunkSize);
+        AC_CACHE.put(key + '_' + i, chunk, CACHE_TTL);
+      }
+      // Store Metadata
+      AC_CACHE.put(key + '_meta', JSON.stringify({ chunks: chunkCount }), CACHE_TTL);
+      // Remove singular key if exists
+      AC_CACHE.remove(key);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { 
+    console.error('Cache Error:', e);
+  }
 }
 
 function clearCache(sheetName) {
   try {
-    AC_CACHE.remove('SHEET_' + sheetName);
+    const key = 'SHEET_' + sheetName;
+    AC_CACHE.remove(key);
+    AC_CACHE.remove(key + '_meta');
+    // We can't easily iterate invalid chunks without tracking, 
+    // but metadata removal invalidates the set. 
+    // Ideally we should track chunks to remove, but TTL will clean them up.
   } catch (e) { /* ignore */ }
 }
 // ----------------------
@@ -489,6 +526,66 @@ function handleList(sheetName, params, sortKeys=[]) {
 }
 
 function handleListPaginated(sheetName, params, sortKeys=[]) {
+  // 🔥 Optimization for AuditLogs: Reverse Read Strategy
+  // If we are listing AuditLogs without complex filters (just pagination),
+  // we should read from the BOTTOM of the sheet directly.
+  const isAuditLogs = sheetName === 'AuditLogs';
+  const hasComplexFilters = Object.keys(params).some(k => 
+      !['action', 'token', 'requestId', 'page', 'pageSize', 'sort', 'query'].includes(k)
+  );
+
+  if (isAuditLogs && !hasComplexFilters && !params.query) {
+      const db = getDB();
+      const sheet = db.getSheetByName(sheetName);
+      if (!sheet) return { success: true, data: { data: [], total: 0 } };
+
+      const totalRows = Math.max(0, sheet.getLastRow() - 1); // Exclude header
+      const page = parseInt(params.page) || 1;
+      const pageSize = parseInt(params.pageSize) || 20;
+      
+      // Calculate Range (Newest first = Bottom rows)
+      // Page 1: Read last 20 rows
+      // Page 2: Read rows before that
+      const endIndex = totalRows - ((page - 1) * pageSize);
+      const startIndex = Math.max(1, endIndex - pageSize + 1);
+      const rowsToRead = endIndex - startIndex + 1;
+
+      if (rowsToRead <= 0) {
+          return { success: true, data: { data: [], total: totalRows, page, pageSize } };
+      }
+
+      // Read Header
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      
+      // Read Chunk (StartRow is startIndex + 1 because row 1 is header)
+      // Actually row index in Sheet is 1-based.
+      // Data area starts at Row 2.
+      // If totalRows = 5. Rows are 2,3,4,5,6.
+      // Page 1 (size 2): Read 5,6.
+      // startRow = 2 + (StartIndex-1)
+      const startRow = 2 + (startIndex - 1);
+      
+      const values = sheet.getRange(startRow, 1, rowsToRead, sheet.getLastColumn()).getValues();
+      
+      // Map and Reverse (to show newest first)
+      const items = values.map(row => {
+          let obj = {}; 
+          headers.forEach((h, i) => obj[h] = row[i]); 
+          return obj;
+      }).reverse();
+
+      return { 
+          success: true, 
+          data: {
+              data: items,
+              total: totalRows,
+              page, 
+              pageSize
+          }
+      };
+  }
+
+  // Fallback to standard (Cached) read for other tables or filtered views
   const res = handleList(sheetName, params, sortKeys);
   const items = res.data;
   const page = parseInt(params.page) || 1;

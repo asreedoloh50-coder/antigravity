@@ -81,7 +81,7 @@ const Admin = {
                             <p class="font-medium">${Utils.escapeHtml(log.action)}</p>
                             <p class="text-sm text-gray-500">${log.targetType}: ${log.targetId}</p>
                         </div>
-                        <span class="text-sm text-gray-400">${Utils.formatRelativeTime(log.createdAt)}</span>
+                        <span class="text-sm text-gray-400">${Utils.formatRelativeTime(log.timestamp || log.createdAt)}</span>
                     </div>
                 `).join('');
             }
@@ -342,8 +342,8 @@ const Admin = {
 
         tbody.innerHTML = res.data.data.map(log => `
             <tr>
-                <td>${Utils.formatDateTime(log.createdAt)}</td>
-                <td>${Utils.escapeHtml(log.actorUserId)}</td>
+                <td>${Utils.formatDateTime(log.timestamp || log.createdAt)}</td>
+                <td>${Utils.escapeHtml(log.actorUserId || log.userId)}</td>
                 <td><span class="badge badge-submitted">${Utils.escapeHtml(log.action)}</span></td>
                 <td>${Utils.escapeHtml(log.targetType)}</td>
                 <td class="font-mono text-sm">${Utils.escapeHtml(log.targetId)}</td>
