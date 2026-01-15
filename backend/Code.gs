@@ -515,6 +515,7 @@ function handleList(sheetName, params, sortKeys=[]) {
   // Filtering
   Object.keys(params).forEach(k => {
     if(['action', 'token', 'requestId', 'page', 'pageSize', 'sort', 'query'].includes(k)) return;
+    if(params[k] === '' || params[k] === null || params[k] === undefined) return; // Skip empty filters
     items = items.filter(i => i[k] == params[k]);
   });
   
