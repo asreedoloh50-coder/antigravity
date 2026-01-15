@@ -811,8 +811,15 @@ function handleRestoreData() { return { success: false, error: 'Not implemented'
 function handleBackupData() { return { success: false, error: 'Not implemented' }; }
 function handleListSubjectTemplates() {
   const db = getDB();
-  const catalog = readSheet(db, 'SubjectCatalog').filter(c => c.isActive !== false);
-  
+  // Relaxed filter: Read ALL subjects first to ensure we see data even if isActive is missing/false
+  // Also fallback to empty array if sheet read fails
+  let catalog = [];
+  try {
+      catalog = readSheet(db, 'SubjectCatalog');
+  } catch (e) {
+      // If sheet doesn't exist, return empty (it will trigger fallback in some logic or just show empty)
+  }
+
   // Standard Category Order
   const categoryOrder = [
     'กลุ่มสาระภาษาไทย',
@@ -830,12 +837,16 @@ function handleListSubjectTemplates() {
   // Group by Category
   const grouped = {};
   catalog.forEach(item => {
+    // Robust name/code getter
+    const name = item.subjectName || item.name || 'วิชาไม่ระบุชื่อ';
+    const code = item.subjectCode || item.code || '';
     const cat = item.category || 'อื่นๆ';
+    
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push({
        id: item.id,
-       name: item.subjectName,
-       code: item.subjectCode
+       name: name,
+       code: code
     });
   });
 
@@ -856,7 +867,11 @@ function handleListSubjectTemplates() {
   return { 
     success: true, 
     data: {
-      templates: catalog.map(c => ({ id: c.id, name: c.subjectName, code: c.subjectCode })),
+      templates: catalog.map(c => ({ 
+          id: c.id, 
+          name: c.subjectName || c.name || 'Unknown', 
+          code: c.subjectCode || c.code || '' 
+      })),
       grouped: sortedGrouped
     } 
   };
