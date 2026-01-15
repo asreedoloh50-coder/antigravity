@@ -8,6 +8,14 @@ const App = {
             try {
                 this.registerRoutes();
                 this.initUI();
+
+                // Auto-Restore Check
+                if (Store.getMode() === 'api') {
+                    API.request('autoRestore').then(res => {
+                        if (res.success && res.data) console.log('Auto-Restore:', res);
+                    }).catch(console.error);
+                }
+
                 Router.init();
             } catch (e) {
                 console.error('Initialization Error:', e);

@@ -67,11 +67,113 @@ function doGet(e) {
     // Redirect to the sheet for convenience
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   }
+  if (e && e.parameter && e.parameter.action === 'setupBackup') {
+    const result = setupBackupTrigger();
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ===== AUTOMATED BACKUP =====
+function setupBackupTrigger() {
+  try {
+    // Check existing triggers to avoid duplicates
+    const triggers = ScriptApp.getProjectTriggers();
+    for (let i = 0; i < triggers.length; i++) {
+      if (triggers[i].getHandlerFunction() === 'autoBackup') {
+         return { success: true, message: 'Backup trigger already exists.' };
+      }
+    }
+    // Create new trigger every 5 minutes
+    ScriptApp.newTrigger('autoBackup')
+      .timeBased()
+      .everyMinutes(5)
+      .create();
+    return { success: true, message: 'Backup trigger set to run every 5 minutes.' };
+  } catch (e) {
+    return { success: false, error: 'Could not set trigger: ' + e.message };
+  }
+}
+
+function autoBackup() {
+  const db = getDB();
+  const folderName = "SmartSchool_Backups";
+  
+  // Find or Create Backup Folder
+  const folders = DriveApp.getFoldersByName(folderName);
+  let folder;
+  if(folders.hasNext()) {
+    folder = folders.next();
+  } else {
+    folder = DriveApp.createFolder(folderName);
+  }
+  
+  // Create Backup File (JSON Snapshot)
+  // To save space, we will only keep the last 50 backups or simplify by just appending time
+  const timestamp = new Date().toISOString().replace(/[:.]/g,'-');
+  const backupData = handleBackupData('SYSTEM_BACKUP'); // Reuse existing backup logic
+  
+  if (backupData.success) {
+    const fileName = `Backup_${timestamp}.json`;
+    folder.createFile(fileName, JSON.stringify(backupData.data), MimeType.PLAIN_TEXT);
+    
+    // Clean up old backups (Keep last 20)
+    const files = folder.getFiles();
+    let fileList = [];
+    while (files.hasNext()) {
+        fileList.push(files.next());
+    }
+    if (fileList.length > 20) {
+        fileList.sort((a,b) => a.getDateCreated() - b.getDateCreated());
+        // Delete oldest
+        while(fileList.length > 20) {
+            fileList[0].setTrashed(true);
+            fileList.shift();
+        }
+    }
+  }
+}
+
+function restoreFromDrive() {
+  const db = getDB();
+  // Safety Check: Only auto-restore if Users sheet is effectively empty (except admin/demo?) or non-existent
+  // Actually, let's check row count. If < 2 (Header only), it's empty.
+  const usersSheet = db.getSheetByName('Users');
+  if (usersSheet && usersSheet.getLastRow() > 1) {
+       return { success: true, message: 'Data exists. Skipping auto-restore.' };
+  }
+
+  const folderName = "SmartSchool_Backups";
+  const folders = DriveApp.getFoldersByName(folderName);
+  if (!folders.hasNext()) return { success: false, error: 'No backup folder found.' };
+  
+  const folder = folders.next();
+  const files = folder.getFiles();
+  let latestFile = null;
+  let latestTime = 0;
+  
+  while (files.hasNext()) {
+      const file = files.next();
+      const created = file.getDateCreated().getTime();
+      if (created > latestTime) {
+          latestTime = created;
+          latestFile = file;
+      }
+  }
+  
+  if (!latestFile) return { success: false, error: 'No backup files found.' };
+  
+  try {
+      const json = latestFile.getBlob().getDataAsString();
+      const data = JSON.parse(json);
+      return handleRestoreData({ data: data }, 'SYSTEM_RESTORE');
+  } catch (e) {
+      return { success: false, error: 'Failed to restore: ' + e.message };
+  }
 }
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
-  lock.tryLock(10000);
+  lock.tryLock(30000); // Increased lock time for restore operations
 
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -99,6 +201,7 @@ function doPost(e) {
       case 'register': result = handleRegister(params); break;
       case 'updateProfile': result = handleUpdateProfile(params, user); break;
       case 'me': result = { success: true, data: { user } }; break;
+      case 'autoRestore': result = restoreFromDrive(); break; // New Auto-Restore Endpoint
 
       // --- Admin: Users ---
       case 'listUsers': result = handleListUsers(params); break;
@@ -441,7 +544,7 @@ function handleRequestRevision(params, user) {
 }
 
 function handleBackupData(user) {
-    if (!user || user.role !== 'admin') return { success: false, error: 'Unauthorized' };
+    if ((!user || user.role !== 'admin') && user !== 'SYSTEM_BACKUP') return { success: false, error: 'Unauthorized' };
     const db = getDB();
     const sheets = db.getSheets();
     const backup = {};
@@ -461,7 +564,7 @@ function handleBackupData(user) {
 }
 
 function handleRestoreData(params, user) {
-    if (!user || user.role !== 'admin') return { success: false, error: 'Unauthorized' };
+    if ((!user || user.role !== 'admin') && user !== 'SYSTEM_RESTORE') return { success: false, error: 'Unauthorized' };
     const data = params.data;
     const db = getDB();
     
