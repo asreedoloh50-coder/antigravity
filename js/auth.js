@@ -13,6 +13,8 @@ const Auth = {
             });
 
             if (result.success) {
+                Store.setSession({ token: result.data.token, expiresAt: result.data.expiresAt });
+                Store.setUser(result.data.user);
                 UI.showToast('เข้าสู่ระบบสำเร็จ', 'success');
                 Router.navigateByRole(result.data.user.role);
             } else {

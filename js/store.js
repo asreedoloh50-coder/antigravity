@@ -10,7 +10,7 @@ const Store = {
     },
 
     getMode() {
-        return localStorage.getItem(this.KEYS.MODE) || 'demo';
+        return localStorage.getItem(this.KEYS.MODE) || 'api';
     },
 
     setMode(mode) {
