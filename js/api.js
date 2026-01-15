@@ -3,7 +3,7 @@
  */
 const API = {
     // Base URL for Google Apps Script Web App
-    BASE_URL: 'https://script.google.com/macros/s/AKfycbzuLHT853o9vAWSVKM63zHVKV8NZjMLzELhgV8eNWCVsrgludIm931KDDN7g3qJ6igg/exec',
+    BASE_URL: 'https://script.google.com/macros/s/AKfycbwPV02B3ivaF9EU1mdiW6FfuBSJqOMYtZPRyGHnrzySkzfUfVEi5RcGkfvpqSyG8WLY/exec',
 
     // Request ID for tracking
     generateRequestId() {
@@ -39,15 +39,22 @@ const API = {
 
             const response = await fetch(this.BASE_URL, {
                 method: 'POST',
-                // headers: { 'Content-Type': 'application/json' }, // Google Apps Script Web App default handling
+                // Important: Use text/plain to avoid CORS Preflight (OPTIONS request) which GAS doesn't handle well
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify(payload)
             });
 
-            const data = await response.json();
-            return { ...data, requestId };
+            const text = await response.text();
+            try {
+                const data = JSON.parse(text);
+                return { ...data, requestId };
+            } catch (e) {
+                console.error('API Invalid JSON:', text);
+                return { success: false, error: 'Server returned invalid JSON (Check Console)', requestId };
+            }
         } catch (error) {
             console.error('API Error:', error);
-            return { success: false, error: 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้: ' + error.message, requestId };
+            return { success: false, error: 'Network/Connection Error: ' + error.message, requestId };
         }
     },
 

@@ -24,7 +24,7 @@ const Admin = {
                             <a href="/admin/logs" data-link class="btn btn-secondary">ดู Logs</a>
                             <button onclick="Admin.backupData()" class="btn btn-secondary">สำรองข้อมูล</button>
                             <button onclick="Admin.showRestoreModal()" class="btn btn-secondary">กู้คืนข้อมูล</button>
-                            <button onclick="API.syncDemoToCloud()" class="btn btn-primary col-span-2 mt-2">🚀 เริ่มต้นข้อมูลใน Google Sheet</button>
+                            <button onclick="window.open(API.BASE_URL + '?action=testPopulate', '_blank')" class="btn btn-primary col-span-2 mt-2">🚀 เริ่มต้น/รีเซ็ต ข้อมูลใน Sheet</button>
                         </div>
                     </div>
                     

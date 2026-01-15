@@ -17,7 +17,7 @@
 
 // ===== CONFIG =====
 // ===== CONFIG =====
-const SPREADSHEET_ID = ''; // Leave empty to AUTO-CREATE a new Sheet for this project
+const SPREADSHEET_ID = '1JCwuRiAALB9UE_w4w44hZ88fpOp3OAz0GiIB0y4oypU'; // Exact ID from User URL
 
 /**
  * Return the Spreadsheet object.
@@ -57,19 +57,25 @@ function setupSheets(ss) {
 // ===== MAIN HANDLERS =====
 
 function doGet(e) {
-  if (e && e.parameter && e.parameter.action === 'debugInfo') {
-    const ss = getDB();
-    const result = { success:true, url: ss.getUrl(), sheets: ss.getSheets().map(s=>s.getName()) };
+  try {
+    const params = e ? e.parameter : {};
+    const action = params.action;
+    let result = { success: false, error: 'Invalid Action (GET)' };
+
+    if (action === 'debugInfo') {
+      const ss = getDB();
+      result = { success:true, url: ss.getUrl(), sheets: ss.getSheets().map(s=>s.getName()) };
+    } else if (action === 'testPopulate') {
+      result = testPopulateData();
+    } else if (action === 'setupBackup') {
+      result = setupBackupTrigger();
+    }
+
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
-  }
-  if (e && e.parameter && e.parameter.action === 'testPopulate') {
-    const result = testPopulateData();
-    // Redirect to the sheet for convenience
-    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
-  }
-  if (e && e.parameter && e.parameter.action === 'setupBackup') {
-    const result = setupBackupTrigger();
-    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, error: error.message, stack: error.stack
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
