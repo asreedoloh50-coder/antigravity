@@ -10,86 +10,126 @@ const API = {
         return 'req_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     },
 
-    // --- Client Cache Strategy ---
+    // --- Client Cache Strategy (Optimized for Fast Loading) ---
     ClientCache: {
         CACHE_PREFIX: 'api_cache_',
-        TTL: 300000, // 5 Minutes
+        TTL: 300000, // 5 Minutes for API mode
+        DEMO_TTL: 30000, // 30 Seconds for Demo mode (faster invalidation)
 
-        get(key) {
+        // In-memory cache for instant access
+        memoryCache: {},
+
+        get(key, isDemo = false) {
+            // 1. Check memory cache first (instant)
+            if (this.memoryCache[key] && Date.now() < this.memoryCache[key].expiry) {
+                return this.memoryCache[key].data;
+            }
+
+            // 2. Fallback to localStorage
             try {
                 const item = localStorage.getItem(this.CACHE_PREFIX + key);
                 if (!item) return null;
                 const parsed = JSON.parse(item);
                 if (Date.now() > parsed.expiry) {
                     localStorage.removeItem(this.CACHE_PREFIX + key);
+                    delete this.memoryCache[key];
                     return null;
                 }
+                // Populate memory cache for future instant access
+                this.memoryCache[key] = parsed;
                 return parsed.data;
             } catch (e) { return null; }
         },
 
-        set(key, data) {
+        set(key, data, isDemo = false) {
             try {
+                const ttl = isDemo ? this.DEMO_TTL : this.TTL;
                 const payload = {
                     data,
-                    expiry: Date.now() + this.TTL
+                    expiry: Date.now() + ttl
                 };
+                // Store in memory cache (instant access)
+                this.memoryCache[key] = payload;
+                // Also persist to localStorage
                 localStorage.setItem(this.CACHE_PREFIX + key, JSON.stringify(payload));
             } catch (e) { /* Storage full */ }
         },
 
         clear() {
+            this.memoryCache = {}; // Clear memory cache
             Object.keys(localStorage).forEach(k => {
                 if (k.startsWith(this.CACHE_PREFIX)) localStorage.removeItem(k);
+            });
+        },
+
+        // Selective clear for specific patterns
+        clearPattern(pattern) {
+            Object.keys(this.memoryCache).forEach(k => {
+                if (k.includes(pattern)) delete this.memoryCache[k];
+            });
+            Object.keys(localStorage).forEach(k => {
+                if (k.startsWith(this.CACHE_PREFIX) && k.includes(pattern)) {
+                    localStorage.removeItem(k);
+                }
             });
         }
     },
 
-    // Main request handler
+    // Main request handler (Optimized for Speed)
     async request(action, params = {}) {
         const mode = Store.getMode();
         const requestId = this.generateRequestId();
+        const isDemo = mode === 'demo';
 
-        // 1. Check Client Cache for Read Actions
-        // Optimized: Cache more heavy lists to make UI snappy
+        // 1. Define Cacheable Actions (READ operations)
+        // These actions can be cached safely for faster UI
         const CACHEABLE_ACTIONS = [
-            'listSubjectCatalog', 'listClasses',
+            // Admin data
+            'listSubjectCatalog', 'listClasses', 'adminListClasses',
             'listTeachers', 'listTerms', 'listSubjectTemplates',
-            'adminGetDashboardStats', 'getTeacherDashboardStats', 'getStudentDashboardStats',
-            'listUsers', 'getAuditLogs', 'listAssignments', 'listSubmissionsByAssignment'
+            'adminGetDashboardStats', 'listUsers', 'getAuditLogs',
+            // Teacher data  
+            'getTeacherDashboardStats', 'listMyClassSubjects',
+            'listAssignments', 'listAssignmentsByClassSubject',
+            'listSubmissionsByAssignment', 'getGradebookData',
+            // Student data
+            'getStudentDashboardStats', 'listSubmissionsByStudent',
+            'getLinkedStudents',
+            // Generic lists
+            'listClassSubjects', 'listSubjects'
         ];
 
-        // Only cache if no special params (like searches) OR simplify to cache unique queries
+        // 2. Generate unique cache key based on action + params
         const cacheKey = action + JSON.stringify(params);
 
-        if (mode !== 'demo' && CACHEABLE_ACTIONS.includes(action)) {
-            const cached = this.ClientCache.get(cacheKey);
+        // 3. Check Client Cache for Read Actions (BOTH modes)
+        if (CACHEABLE_ACTIONS.includes(action)) {
+            const cached = this.ClientCache.get(cacheKey, isDemo);
             if (cached) {
-                // console.log('⚡ Using Client Cache:', action);
+                // Return cached data immediately with indicator
                 return { ...cached, requestId, fromCache: true };
             }
         }
 
+        // 4. Execute the actual request
         let response;
-        if (mode === 'demo') {
+        if (isDemo) {
             response = await this.demoRequest(action, params, requestId);
         } else {
             response = await this.apiRequest(action, params, requestId);
+        }
 
-            if (response.success) {
-                // 2. Save to Client Cache if Read
-                if (CACHEABLE_ACTIONS.includes(action)) {
-                    this.ClientCache.set(cacheKey, response);
-                } else {
-                    // 3. Auto-Invalidate Cache on Write (Write-Through)
-                    // If we successfully did an action NOT in the read-list, 
-                    // assume it modified data and clear cache to prevent stale data.
-                    // This creates a "Fresh on Edit / Fast on View" experience.
-                    // console.log('🧹 Clearing Client Cache due to Write Action:', action);
-                    this.ClientCache.clear();
-                }
+        // 5. Cache successful read responses
+        if (response.success) {
+            if (CACHEABLE_ACTIONS.includes(action)) {
+                this.ClientCache.set(cacheKey, response, isDemo);
+            } else {
+                // 6. Auto-Invalidate Cache on Write (Write-Through Strategy)
+                // Any action that modifies data should clear related cache
+                this.ClientCache.clear();
             }
         }
+
         return response;
     },
 
@@ -129,9 +169,9 @@ const API = {
         }
     },
 
-    // Demo mode request handler
+    // Demo mode request handler (Optimized - No artificial delay)
     async demoRequest(action, params, requestId) {
-        await new Promise(r => setTimeout(r, 200)); // Simulate network delay
+        // No delay for instant response in demo mode
 
         const handlers = {
             // Auth
@@ -186,6 +226,7 @@ const API = {
             'getAuditLogs': () => this.demoGetAuditLogs(params),
             'backupData': () => this.demoBackupData(params),
             'restoreData': () => this.demoRestoreData(params),
+            'adminGetDashboardStats': () => this.demoAdminGetDashboardStats(params),
 
             // Export
             'exportGradesCSV': () => this.demoExportGradesCSV(params),
@@ -1082,6 +1123,29 @@ const API = {
         const sorted = Utils.sortBy(logs, 'createdAt', 'desc');
         const paginated = Utils.paginate(sorted, params.page || 1, params.pageSize || 50);
         return { success: true, data: paginated };
+    },
+
+    // Admin Dashboard Stats (Fast loading for Admin)
+    demoAdminGetDashboardStats(params) {
+        const user = Store.getUser();
+        if (!user || user.role !== 'admin') {
+            return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+        }
+
+        // Get counts efficiently
+        const users = Store.demoFilter('users', u => u.isActive !== false);
+        const stats = {
+            totalUsers: users.length,
+            teachers: users.filter(u => u.role === 'teacher').length,
+            students: users.filter(u => u.role === 'student').length,
+            parents: users.filter(u => u.role === 'parent').length
+        };
+
+        // Get recent logs (last 10)
+        const logs = Store.demoFilter('audit_logs', l => true);
+        const recentLogs = Utils.sortBy(logs, 'createdAt', 'desc').slice(0, 10);
+
+        return { success: true, data: { stats, recentLogs } };
     },
 
     demoBackupData(params) {

@@ -923,15 +923,187 @@ function handleListClassSubjects(params) {
 }
 function handleListSubmissionsByAssignment(p) { return handleList('Submissions', p); }
 function handleGradeSubmission(p, u) { return handleUpdate('Submissions', { ...p, id: p.submissionId, teacherId: u.id, gradedAt: new Date().toISOString(), status: 'GRADED' }); }
-function handleGetTeacherDashboardStats() { return { success: true, data: {} }; }
-function handleGetStudentDashboardStats() { return { success: true, data: {} }; }
-function handleGetGradebookData() { return { success: true, data: [] }; }
+
+// Optimized Teacher Dashboard Stats
+function handleGetTeacherDashboardStats(user) { 
+    const db = getDB();
+    
+    // Get teacher's class subjects
+    const classSubjects = readSheet(db, 'ClassSubjects').filter(cs => cs.teacherId === user.id && cs.isActive !== false);
+    const classSubjectIds = classSubjects.map(cs => cs.id);
+    const classIds = [...new Set(classSubjects.map(cs => cs.classId))];
+    
+    // Get assignments for these class subjects
+    const assignments = readSheet(db, 'Assignments').filter(a => 
+        a.isActive !== false && classSubjectIds.includes(a.classSubjectId)
+    );
+    const assignmentIds = assignments.map(a => a.id);
+    
+    // Get submissions for these assignments
+    const submissions = readSheet(db, 'Submissions').filter(s => 
+        assignmentIds.includes(s.assignmentId)
+    );
+    
+    // Calculate stats
+    const stats = {
+        classesCount: classIds.length,
+        assignmentsCount: assignments.length,
+        pendingCount: submissions.filter(s => ['SUBMITTED', 'LATE_SUBMISSION'].includes(s.status)).length,
+        gradedCount: submissions.filter(s => s.status === 'GRADED').length
+    };
+    
+    // Get recent pending submissions (last 5)
+    const users = readSheet(db, 'Users');
+    const catalog = readSheet(db, 'SubjectCatalog');
+    
+    const recentPending = submissions
+        .filter(s => ['SUBMITTED', 'LATE_SUBMISSION'].includes(s.status))
+        .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
+        .slice(0, 5)
+        .map(s => {
+            const assign = assignments.find(a => a.id === s.assignmentId);
+            const student = users.find(u => u.id === s.studentId);
+            const cs = classSubjects.find(c => c.id === assign?.classSubjectId);
+            const cat = catalog.find(c => c.id === cs?.catalogId);
+            return {
+                id: s.id,
+                studentName: student?.name || 'Unknown',
+                assignmentTitle: assign?.title || 'Unknown',
+                subjectName: cat?.subjectName || 'Unknown',
+                submittedAt: s.submittedAt
+            };
+        });
+    
+    return { success: true, data: { stats, recentPending } }; 
+}
+
+// Optimized Student Dashboard Stats
+function handleGetStudentDashboardStats(user) { 
+    const db = getDB();
+    
+    // Get student's primary class
+    const classes = readSheet(db, 'Classes');
+    let myClassIds = [];
+    
+    if (user.primaryClassId) {
+        myClassIds = [user.primaryClassId];
+    } else {
+        // Fallback to enrollments
+        const enrollments = readSheet(db, 'Enrollments').filter(e => 
+            e.studentId === user.id && e.isActive !== false
+        );
+        myClassIds = enrollments.map(e => e.classId);
+    }
+    
+    // Get class subjects for my classes
+    const classSubjects = readSheet(db, 'ClassSubjects').filter(cs => 
+        myClassIds.includes(cs.classId) && cs.isActive !== false
+    );
+    const classSubjectIds = classSubjects.map(cs => cs.id);
+    
+    // Get assignments for these class subjects
+    const assignments = readSheet(db, 'Assignments').filter(a => 
+        a.isActive !== false && classSubjectIds.includes(a.classSubjectId)
+    );
+    const assignmentIds = assignments.map(a => a.id);
+    
+    // Get my submissions
+    const allSubmissions = readSheet(db, 'Submissions');
+    const mySubmissions = allSubmissions.filter(s => s.studentId === user.id);
+    const submittedAssignmentIds = mySubmissions.map(s => s.assignmentId);
+    
+    // Calculate stats
+    const pendingAssignments = assignments.filter(a => !submittedAssignmentIds.includes(a.id));
+    const gradedSubmissions = mySubmissions.filter(s => s.status === 'GRADED');
+    
+    const stats = {
+        classesCount: myClassIds.length,
+        assignmentsCount: assignments.length,
+        pendingCount: pendingAssignments.length,
+        gradedCount: gradedSubmissions.length
+    };
+    
+    // Get upcoming (non-overdue) assignments
+    const now = new Date();
+    const upcoming = pendingAssignments
+        .filter(a => new Date(a.dueDate) > now)
+        .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
+        .slice(0, 5);
+    
+    return { success: true, data: { stats, upcoming } }; 
+}
+
 function handleGet(sheet, id) { 
     const db = getDB(); 
     const item = findRow(db, sheet, 'id', id); 
     return item ? { success: true, data: item } : { success: false, error: 'Not found' };
 }
 function handleGetClassDetail(id) { return handleGet('Classes', id); }
+
+// Gradebook Data for Teachers
+function handleGetGradebookData(params, user) {
+    if (!user || user.role !== 'teacher') {
+        return { success: false, error: 'ไม่มีสิทธิ์ดำเนินการ' };
+    }
+    
+    const db = getDB();
+    
+    // Get teacher's class subjects
+    const classSubjects = readSheet(db, 'ClassSubjects').filter(cs => 
+        cs.teacherId === user.id && cs.isActive !== false
+    );
+    
+    if (!classSubjects.length) {
+        return { success: true, data: { classSubjects: [], gradebook: [] } };
+    }
+    
+    const classSubjectIds = classSubjects.map(cs => cs.id);
+    const classIds = [...new Set(classSubjects.map(cs => cs.classId))];
+    
+    // Get class info
+    const classes = readSheet(db, 'Classes').filter(c => classIds.includes(c.id));
+    const catalog = readSheet(db, 'SubjectCatalog');
+    
+    // Enrich class subjects
+    const enrichedClassSubjects = classSubjects.map(cs => {
+        const classObj = classes.find(c => c.id === cs.classId);
+        const cat = catalog.find(c => c.id === cs.catalogId);
+        return {
+            id: cs.id,
+            className: classObj?.name || 'Unknown',
+            subjectName: cat?.subjectName || 'Unknown',
+            subjectCode: cat?.subjectCode || ''
+        };
+    });
+    
+    // Get assignments for these class subjects
+    const assignments = readSheet(db, 'Assignments').filter(a => 
+        a.isActive !== false && classSubjectIds.includes(a.classSubjectId)
+    );
+    
+    // Get all submissions for these assignments
+    const assignmentIds = assignments.map(a => a.id);
+    const submissions = readSheet(db, 'Submissions').filter(s => 
+        assignmentIds.includes(s.assignmentId)
+    );
+    
+    // Get students from enrollments
+    const enrollments = readSheet(db, 'Enrollments').filter(e => 
+        classIds.includes(e.classId) && e.isActive !== false
+    );
+    const studentIds = [...new Set(enrollments.map(e => e.studentId))];
+    const users = readSheet(db, 'Users');
+    const students = users.filter(u => studentIds.includes(u.id));
+    
+    return { 
+        success: true, 
+        data: { 
+            classSubjects: enrichedClassSubjects,
+            assignments: assignments.length,
+            students: students.length
+        } 
+    };
+}
 
 function restoreFromDrive() { return { success: false, error: "Auto-restore not configured" }; }
 
